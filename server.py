@@ -42,10 +42,19 @@ server = MCPServer(
 SHOTS = Path(os.environ.get("LINUX_GUI_MCP_SHOTS", Path(tempfile.gettempdir()) / "linux-gui-mcp"))
 
 
-def _picture(window: Window | None, tag: str) -> list:
+def _picture(window: Window | None, tag: str, wanted: bool = True) -> list:
+    """A screenshot of what just happened, unless the caller declined one.
+
+    Optional because it is the expensive part: capturing costs about a second,
+    while everything else here is a few tens of milliseconds. A sequence of
+    actions that only needs to see the end result should not pay for a picture
+    of each step.
+    """
+    if not wanted:
+        return []
     path = desktop.screenshot(SHOTS / f"{tag}.png", window)
     data = base64.b64encode(path.read_bytes()).decode("ascii")
-    return ImageContent(type="image", data=data, mimeType="image/png")
+    return [ImageContent(type="image", data=data, mimeType="image/png")]
 
 
 def _resolve(window_id: str | None) -> Window | None:
@@ -99,23 +108,25 @@ def find_window(
 @server.tool()
 def focus_window(
     window_id: Annotated[str, Field(description="Window id from find_window")],
-    settle_ms: Annotated[int, Field(description="Wait before the screenshot")] = 300,
+    settle_ms: Annotated[int, Field(description="Wait before looking, in ms")] = 300,
+    screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
 ) -> list:
     """Bring a window to the front and show it."""
     desktop.focus_window(window_id)
     desktop.settle(settle_ms)
     window = desktop.window_info(window_id)
-    return [window.as_dict(), _picture(window, "focus")]
+    return [window.as_dict(), *_picture(window, "focus", screenshot)]
 
 
 @server.tool()
 def screenshot(
     window_id: Annotated[str | None, Field(description="Omit for the whole screen")] = None,
     settle_ms: Annotated[int, Field(description="Wait before capturing")] = 0,
+    screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
 ) -> list:
     """Look at the screen, or at one window."""
     desktop.settle(settle_ms)
-    return [_picture(_resolve(window_id), "shot")]
+    return _picture(_resolve(window_id), "shot", screenshot)
 
 
 @server.tool()
@@ -126,7 +137,8 @@ def click(
     button: Annotated[str, Field(description="left, right or middle")] = "left",
     count: Annotated[int, Field(description="2 for a double click")] = 1,
     focus_first: Annotated[bool, Field(description="Raise the window before clicking")] = True,
-    settle_ms: Annotated[int, Field(description="Wait before the screenshot")] = 400,
+    settle_ms: Annotated[int, Field(description="Wait before looking, in ms")] = 400,
+    screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
 ) -> list:
     """Click, and show what happened."""
     window = _resolve(window_id)
@@ -140,7 +152,7 @@ def click(
     desktop.move_mouse(screen_x, screen_y)
     desktop.click(button, count)
     desktop.settle(settle_ms)
-    return [_picture(window, "click")]
+    return _picture(window, "click", screenshot)
 
 
 @server.tool()
@@ -151,7 +163,8 @@ def drag(
     to_y: int,
     window_id: Annotated[str | None, Field(description="Coordinates inside this window")] = None,
     button: Annotated[str, Field(description="left, right or middle")] = "left",
-    settle_ms: Annotated[int, Field(description="Wait before the screenshot")] = 500,
+    settle_ms: Annotated[int, Field(description="Wait before looking, in ms")] = 500,
+    screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
 ) -> list:
     """Press, move and release - a drag, or a drag and drop."""
     window = _resolve(window_id)
@@ -159,7 +172,7 @@ def drag(
     end = _point(window, to_x, to_y)
     desktop.drag(start[0], start[1], end[0], end[1], button)
     desktop.settle(settle_ms)
-    return [_picture(window, "drag")]
+    return _picture(window, "drag", screenshot)
 
 
 @server.tool()
@@ -184,7 +197,8 @@ def type_text(
             )
         ),
     ] = None,
-    settle_ms: Annotated[int, Field(description="Wait before the screenshot")] = 300,
+    settle_ms: Annotated[int, Field(description="Wait before looking, in ms")] = 300,
+    screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
 ) -> list:
     """Type into whatever has focus.
 
@@ -199,7 +213,7 @@ def type_text(
         desktop.settle(150)
     desktop.type_text(text, method=method, layout=layout)
     desktop.settle(settle_ms)
-    return [_picture(window, "type")]
+    return _picture(window, "type", screenshot)
 
 
 @server.tool()
@@ -233,7 +247,8 @@ def input_settings() -> dict:
 def press_keys(
     keys: Annotated[str, Field(description='A chord such as "ctrl+s" or "alt+f4"')],
     window_id: Annotated[str | None, Field(description="Focus this window first")] = None,
-    settle_ms: Annotated[int, Field(description="Wait before the screenshot")] = 300,
+    settle_ms: Annotated[int, Field(description="Wait before looking, in ms")] = 300,
+    screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
 ) -> list:
     """Press a keyboard shortcut."""
     window = _resolve(window_id)
@@ -242,7 +257,7 @@ def press_keys(
         desktop.settle(150)
     desktop.press(keys)
     desktop.settle(settle_ms)
-    return [_picture(window, "keys")]
+    return _picture(window, "keys", screenshot)
 
 
 @server.tool()
@@ -252,6 +267,7 @@ def scroll(
     y: int | None = None,
     window_id: str | None = None,
     settle_ms: int = 300,
+    screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
 ) -> list:
     """Scroll the wheel."""
     window = _resolve(window_id)
@@ -260,7 +276,7 @@ def scroll(
         desktop.move_mouse(screen_x, screen_y)
     desktop.scroll(amount)
     desktop.settle(settle_ms)
-    return [_picture(window, "scroll")]
+    return _picture(window, "scroll", screenshot)
 
 
 @server.tool()
@@ -268,6 +284,7 @@ def wait_for_window(
     pattern: Annotated[str, Field(description="Regular expression against title and class")],
     timeout_s: Annotated[float, Field(description="Give up after this long")] = 15.0,
     settle_ms: Annotated[int, Field(description="Let it finish drawing before looking")] = 800,
+    screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
 ) -> list:
     """Wait until a window appears, then show it.
 
@@ -278,7 +295,7 @@ def wait_for_window(
     window = desktop.wait_for_window(pattern, timeout_s)
     desktop.settle(settle_ms)
     window = desktop.window_info(window.id)
-    return [window.as_dict(), _picture(window, "waited")]
+    return [window.as_dict(), *_picture(window, "waited", screenshot)]
 
 
 @server.tool()
@@ -310,6 +327,7 @@ def run_app(
     command: Annotated[list[str], Field(description='Program and arguments, e.g. ["kate", "notes.md"]')],
     cwd: Annotated[str | None, Field(description="Working directory")] = None,
     wait_for_window_s: Annotated[float, Field(description="Wait this long for its window; 0 to skip")] = 20.0,
+    screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
     settle_ms: Annotated[int, Field(description="Let it finish drawing before looking")] = 800,
 ) -> list:
     """Start a graphical program in the desktop session and show its window.
@@ -324,7 +342,7 @@ def run_app(
     window = desktop.wait_for_window_of(pid, wait_for_window_s)
     desktop.settle(settle_ms)
     window = desktop.window_info(window.id)
-    return [{"pid": pid, "window": window.as_dict()}, _picture(window, "launched")]
+    return [{"pid": pid, "window": window.as_dict()}, *_picture(window, "launched", screenshot)]
 
 
 @server.tool()
@@ -333,6 +351,7 @@ def run_in_terminal(
     cwd: Annotated[str | None, Field(description="Working directory")] = None,
     wait_for_window_s: float = 20.0,
     settle_ms: Annotated[int, Field(description="Let the program draw before looking")] = 1500,
+    screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
 ) -> list:
     """Run a command in a real terminal window, and show it.
 
@@ -359,7 +378,7 @@ def run_in_terminal(
     window = desktop.wait_for_window_of(pid, wait_for_window_s)
     desktop.settle(settle_ms)
     window = desktop.window_info(window.id)
-    return [{"pid": pid, "window": window.as_dict()}, _picture(window, "terminal")]
+    return [{"pid": pid, "window": window.as_dict()}, *_picture(window, "terminal", screenshot)]
 
 
 @server.tool()
@@ -378,6 +397,7 @@ def click_tray_item(
     pattern: Annotated[str, Field(description="Matched against the item id and title")],
     action: Annotated[str, Field(description="activate (left), secondary (middle) or context (right)")] = "activate",
     settle_ms: Annotated[int, Field(description="Let the menu or window appear")] = 700,
+    screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
 ) -> list:
     """Click a tray item and show what appeared.
 
@@ -388,7 +408,7 @@ def click_tray_item(
     item = desktop.tray.find(pattern)
     desktop.tray.act(item, action)
     desktop.settle(settle_ms)
-    return [item.as_dict(), _picture(None, "tray")]
+    return [item.as_dict(), *_picture(None, "tray", screenshot)]
 
 
 @server.tool()
@@ -397,12 +417,13 @@ def scroll_tray_item(
     delta: Annotated[int, Field(description="Positive up, negative down")],
     orientation: Annotated[str, Field(description="vertical or horizontal")] = "vertical",
     settle_ms: int = 500,
+    screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
 ) -> list:
     """Scroll on a tray item - volume applets use this."""
     item = desktop.tray.find(pattern)
     desktop.tray.scroll(item, delta, orientation)
     desktop.settle(settle_ms)
-    return [item.as_dict(), _picture(None, "tray-scroll")]
+    return [item.as_dict(), *_picture(None, "tray-scroll", screenshot)]
 
 
 @server.tool()

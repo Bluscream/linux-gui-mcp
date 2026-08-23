@@ -142,6 +142,35 @@ moving a known distance and reading back where it landed. On this desktop the
 factor is about 2.0; it depends on your acceleration settings, so it is
 measured rather than assumed.
 
+## Speed
+
+Capturing is the expensive part - about a second, against tens of
+milliseconds for everything else. So every action that returns a picture takes
+`screenshot: bool`, and a sequence that only needs to see the end result can
+decline the intermediate ones:
+
+```
+click without picture: 0.46s
+click with picture:    1.69s
+```
+
+Three faster capture paths were tried and none of them work here:
+
+- **`org.kde.KWin.ScreenShot2`** takes a file descriptor and would skip Qt
+  startup entirely. KWin refuses: *"The process is not authorized to take a
+  screenshot"* - only whitelisted binaries may call it. That is a deliberate
+  KDE restriction, not a missing dependency.
+- **`org.kde.Spectacle`** over D-Bus keeps one process warm, but its methods
+  are `no-reply` and return neither the image nor its path. Using it would
+  mean rewriting the user's save-location config and polling a guessed path.
+- **Warm cache** makes no difference: the second run costs the same as the
+  first, and 0.93s of the 1.02s is CPU. It is Qt starting up, not I/O.
+
+Reading the tray was 0.72s because each item's five properties were fetched
+separately. `busctl get-property` takes several names at once, which brought
+it to 0.34s. Not `GetAll`, which also returns the icon pixmap - several
+thousand bytes of image per item, none of it wanted.
+
 ## Known gaps
 
 **Multi-monitor origins.** With more than one output, a full screenshot and
