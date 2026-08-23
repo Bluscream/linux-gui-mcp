@@ -41,8 +41,8 @@ def spawn(
     return child.pid
 
 
-def windows_of(pid: int) -> list[Window]:
-    """Every window belonging to a process or its child processes (e.g. distrobox/podman exec)."""
+def windows_of(pid: int, target_name: str | None = None) -> list[Window]:
+    """Every window belonging to a process, its children, or matching target executable name."""
     pids = {pid}
     with contextlib.suppress(Exception):
         stats = []
@@ -57,13 +57,16 @@ def windows_of(pid: int) -> list[Window]:
                     pids.add(c_pid)
     all_windows = windows.search_windows(".")
     matched = [window for window in all_windows if window.pid in pids]
-    if not matched and all_windows:
-        # Fallback for container runtime namespaces where host pid does not map to container pid
-        return all_windows[-1:]
+    if not matched and target_name and all_windows:
+        target_clean = target_name.lower().strip()
+        matched = [
+            w for w in all_windows
+            if target_clean in (w.app_class or "").lower() or target_clean in (w.title or "").lower()
+        ]
     return matched
 
 
-def wait_for_window_of(pid: int, timeout: float = 20.0, poll: float = 0.3) -> Window:
+def wait_for_window_of(pid: int, timeout: float = 20.0, poll: float = 0.3, target_name: str | None = None) -> Window:
     """Wait for a process to put a window on screen.
 
     A process existing and a process having a window are different facts, and
@@ -71,7 +74,7 @@ def wait_for_window_of(pid: int, timeout: float = 20.0, poll: float = 0.3) -> Wi
     """
     deadline = time.monotonic() + timeout
     while True:
-        windows = windows_of(pid)
+        windows = windows_of(pid, target_name=target_name)
         if windows:
             return windows[0]
         if not Path(f"/proc/{pid}").exists():

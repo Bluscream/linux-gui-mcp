@@ -387,7 +387,7 @@ def run_app(
     pid = desktop.spawn(full_cmd, cwd=cwd, env=env)
     if wait_for_window_s <= 0:
         return [{"pid": pid, "windows": []}]
-    window = desktop.wait_for_window_of(pid, wait_for_window_s)
+    window = desktop.wait_for_window_of(pid, wait_for_window_s, target_name=target_name)
     desktop.settle(settle_ms)
     window = desktop.window_info(window.id)
     return [{"pid": pid, "window": window.as_dict()}, *_picture(window, "launched", screenshot)]
