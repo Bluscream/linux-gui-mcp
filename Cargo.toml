@@ -1,0 +1,28 @@
+[package]
+name = "linux-gui-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "Drive a KDE/Wayland desktop over MCP"
+
+[dependencies]
+rmcp = { version = "3", features = ["server", "transport-io", "macros"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "time", "io-util"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+anyhow = "1"
+base64 = "0.22"
+zbus = "5"
+image = { version = "0.25", default-features = false, features = ["png"] }
+regex = "1"
+# Input goes straight to the kernel's uinput device rather than through
+# ydotool: no daemon to keep running, and a virtual *absolute* pointer is not
+# subject to pointer acceleration, which is what made positioning unreliable.
+evdev = "0.13"
+# The Wayland clipboard, spoken directly rather than through wl-copy.
+wl-clipboard-rs = "0.9"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
