@@ -344,6 +344,12 @@ def run_app(
     args: Annotated[list[str] | None, Field(description="Arguments list for the executable")] = None,
     env: Annotated[dict[str, str] | None, Field(description="Additional environment variables")] = None,
     cwd: Annotated[str | None, Field(description="Working directory")] = None,
+    focus_if_running: Annotated[
+        bool, Field(description="If a matching window is already running, focus and return it instead of spawning a new instance")
+    ] = True,
+    restart_if_running: Annotated[
+        bool, Field(description="If a matching window/process is already running, terminate it before spawning a fresh instance")
+    ] = False,
     wait_for_window_s: Annotated[float, Field(description="Wait this long for its window; 0 to skip")] = 20.0,
     screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
     settle_ms: Annotated[int, Field(description="Let it finish drawing before looking")] = 800,
@@ -355,6 +361,29 @@ def run_app(
     are merged into the desktop session environment.
     """
     full_cmd = [executable, *(args or [])]
+    target_name = Path(full_cmd[-1] if full_cmd else executable).name
+
+    # Check for existing matching windows if requested
+    existing_windows = [
+        w for w in desktop.search_windows(".")
+        if target_name.lower() in (w.app_class or "").lower()
+        or target_name.lower() in (w.title or "").lower()
+    ]
+
+    if existing_windows:
+        if restart_if_running:
+            for w in existing_windows:
+                with contextlib.suppress(Exception):
+                    import os, signal
+                    os.kill(w.pid, signal.SIGKILL)
+            time.sleep(0.3)
+        elif focus_if_running:
+            window = existing_windows[0]
+            desktop.focus_window(window.id)
+            desktop.settle(settle_ms)
+            window = desktop.window_info(window.id)
+            return [{"pid": window.pid, "window": window.as_dict(), "focused_existing": True}, *_picture(window, "focused", screenshot)]
+
     pid = desktop.spawn(full_cmd, cwd=cwd, env=env)
     if wait_for_window_s <= 0:
         return [{"pid": pid, "windows": []}]
