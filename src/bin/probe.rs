@@ -22,9 +22,9 @@ fn read_pointer() -> String {
 }
 
 fn main() -> anyhow::Result<()> {
-    let (w, h) = (4080, 1440);
+    let scale = (2.0, 2.0);
     for (x, y) in [(200, 200), (1500, 700), (2600, 1100)] {
-        input::move_mouse(x, y, w, h)?;
+        input::move_to(x, y, scale)?;
         std::thread::sleep(std::time::Duration::from_millis(300));
         println!("asked ({x},{y}) -> landed {}", read_pointer());
     }
