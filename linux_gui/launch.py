@@ -61,7 +61,7 @@ def windows_of(pid: int, target_name: str | None = None) -> list[Window]:
         target_clean = target_name.lower().strip()
         matched = [
             w for w in all_windows
-            if target_clean in (w.app_class or "").lower() or target_clean in (w.title or "").lower()
+            if target_clean in (w.cls or "").lower() or target_clean in (w.title or "").lower()
         ]
     return matched
 

@@ -366,7 +366,7 @@ def run_app(
     # Check for existing matching windows if requested
     existing_windows = [
         w for w in desktop.search_windows(".")
-        if target_name.lower() in (w.app_class or "").lower()
+        if target_name.lower() in (w.cls or "").lower()
         or target_name.lower() in (w.title or "").lower()
     ]
 
