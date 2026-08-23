@@ -17,6 +17,7 @@ device because no X tool can reach a native Wayland window.
 from __future__ import annotations
 
 import base64
+import contextlib
 import os
 import tempfile
 from pathlib import Path
