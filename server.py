@@ -509,7 +509,7 @@ def find_and_click(
     else:
         cx, cy = 640, 400
 
-    desktop.click(cx, cy, timeout=timeout)
+    desktop.click()
     desktop.settle(settle_ms)
     return _picture(window, f"click_{text_lower}", screenshot)
 
