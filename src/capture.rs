@@ -1,12 +1,17 @@
 //! Capture the screen through KWin, without starting a Qt application.
 //!
-//! `spectacle` costs about a second, almost all of it Qt starting up. KWin
-//! will hand the pixels straight over D-Bus instead - it writes them into a
-//! file descriptor we pass it - but only to a process it recognises. That
-//! recognition is by executable, so this is an executable that does nothing
-//! else.
+//! `spectacle` costs about half a second, almost all of it Qt starting up.
+//! KWin will hand the pixels straight over D-Bus instead - it writes them into
+//! a file descriptor we pass it - but only to a process it recognises, and it
+//! recognises them by executable.
 //!
-//! Usage: kwin-capture <screen|window|area> <out.png> [x y w h]
+//! That is why this being one binary matters. On the Python branch the capture
+//! had to be a separate executable so the permission could be granted to it
+//! alone; granting it to a Python interpreter would have handed screen capture
+//! to every Python program on the machine. Here there is one binary to grant
+//! it to, which is the whole thing this server is.
+
+use anyhow::{anyhow, Result};
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -19,14 +24,7 @@ const SERVICE: &str = "org.kde.KWin";
 const PATH: &str = "/org/kde/KWin/ScreenShot2";
 const INTERFACE: &str = "org.kde.KWin.ScreenShot2";
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() < 3 {
-        eprintln!("usage: kwin-capture <screen|window|area> <out.png> [x y w h]");
-        std::process::exit(2);
-    }
-    let what = args[1].as_str();
-    let out = &args[2];
+pub fn capture(what: &str, out: &str, area: Option<(i32, i32, i32, i32)>) -> Result<()> {
 
     let (read_end, write_end) = pipe()?;
     let connection = Connection::session()?;
@@ -50,34 +48,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &(options, Fd::from(write_end.as_fd())),
         ),
         "area" => {
-            if args.len() < 7 {
-                eprintln!("area needs x y w h");
-                std::process::exit(2);
-            }
-            let numbers: Vec<i32> = args[3..7].iter().filter_map(|a| a.parse().ok()).collect();
-            if numbers.len() != 4 {
-                eprintln!("area needs four numbers");
-                std::process::exit(2);
-            }
+            let (x, y, w, h) = area.ok_or_else(|| anyhow!("area needs x, y, width and height"))?;
             connection.call_method(
                 Some(SERVICE),
                 PATH,
                 Some(INTERFACE),
                 "CaptureArea",
-                &(
-                    numbers[0],
-                    numbers[1],
-                    numbers[2] as u32,
-                    numbers[3] as u32,
-                    options,
-                    Fd::from(write_end.as_fd()),
-                ),
+                &(x, y, w as u32, h as u32, options, Fd::from(write_end.as_fd())),
             )
         }
-        other => {
-            eprintln!("unknown target {other:?}; use screen, window or area");
-            std::process::exit(2);
-        }
+        other => anyhow::bail!("unknown target {other:?}; use screen, window or area"),
     }?;
 
     // Dropped so the read end sees end-of-file once KWin is finished.
@@ -103,17 +83,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     image::RgbaImage::from_raw(width, height, rgba)
-        .ok_or("the pixels did not fit the reported size")?
+        .ok_or_else(|| anyhow!("the pixels did not fit the reported size"))?
         .save(out)?;
     Ok(())
 }
 
-fn number(metadata: &HashMap<String, OwnedValue>, key: &str) -> Result<u64, String> {
-    let value = metadata.get(key).ok_or(format!("no {key} in the reply"))?;
+fn number(metadata: &HashMap<String, OwnedValue>, key: &str) -> Result<u64> {
+    let value = metadata.get(key).ok_or_else(|| anyhow!("no {key} in the reply"))?;
     u32::try_from(value)
         .map(u64::from)
         .or_else(|_| i32::try_from(value).map(|n| n as u64))
-        .map_err(|_| format!("{key} was not a number"))
+        .map_err(|_| anyhow!("{key} was not a number"))
 }
 
 fn pipe() -> std::io::Result<(OwnedFd, OwnedFd)> {

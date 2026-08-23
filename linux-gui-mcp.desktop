@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=linux-gui-mcp
+Comment=Desktop automation server for MCP
+Exec=/run/media/system/Data/Projects/MCPs/linux-gui-mcp/target/release/linux-gui-mcp
+NoDisplay=true
+Terminal=false
+# KWin grants ScreenShot2 by looking up the calling executable's desktop file,
+# which is how spectacle, plasmashell and the xdg portal each authorise
+# themselves. One binary means one grant - on the Python branch this had to be
+# a separate helper, because granting it to a Python interpreter would have
+# handed screen capture to every Python program on the machine.
+X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2
