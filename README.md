@@ -154,17 +154,36 @@ click without picture: 0.46s
 click with picture:    1.69s
 ```
 
-Three faster capture paths were tried and none of them work here:
+Capture goes through `capture-helper/`, a small Rust binary that asks KWin for
+the pixels over D-Bus and writes them into a pipe. It exists as a separate
+executable for one reason: KWin grants `ScreenShot2` by looking up the calling
+executable's desktop file, so the permission follows the binary. Granting it
+to a Python interpreter would hand screen capture to every Python program on
+the machine; granting it to this hands it to one program that captures the
+screen and does nothing else.
 
-- **`org.kde.KWin.ScreenShot2`** takes a file descriptor and would skip Qt
-  startup entirely. KWin refuses: *"The process is not authorized to take a
-  screenshot"* - only whitelisted binaries may call it. That is a deliberate
-  KDE restriction, not a missing dependency.
-- **`org.kde.Spectacle`** over D-Bus keeps one process warm, but its methods
-  are `no-reply` and return neither the image nor its path. Using it would
-  mean rewriting the user's save-location config and polling a guessed path.
-- **Warm cache** makes no difference: the second run costs the same as the
-  first, and 0.93s of the 1.02s is CPU. It is Qt starting up, not I/O.
+Build it and install the grant:
+
+```
+cd capture-helper && cargo build --release
+cp kwin-capture.desktop ~/.local/share/applications/
+```
+
+Without it everything still works - it falls back to spectacle, which is
+always allowed and slower. With it:
+
+| | spectacle | kwin-capture |
+| --- | --- | --- |
+| whole screen | 0.56s | 0.45s |
+| one window | 0.56s | **0.04s** |
+
+The window case is the one that matters, since most actions capture a window.
+
+Two other routes were tried and are dead ends. `KWIN_SCREENSHOT_NO_PERMISSION_CHECKS=1`
+on the compositor works but disables the check for everything on the machine.
+Spectacle's own D-Bus methods are `no-reply` and return neither the image nor
+its path, so using them would mean rewriting the save-location config and
+polling a guessed path.
 
 Reading the tray was 0.72s because each item's five properties were fetched
 separately. `busctl get-property` takes several names at once, which brought

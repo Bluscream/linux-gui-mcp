@@ -6,6 +6,7 @@ server in the path there is nothing for them to inject into."""
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import subprocess
@@ -207,11 +208,9 @@ def type_text(
         return
 
     previous = None
-    try:
+    # An empty clipboard makes wl-paste exit non-zero. Nothing to restore.
+    with contextlib.suppress(DesktopError):
         previous = run([which("wl-paste"), "--no-newline"], timeout=5.0)
-    except DesktopError:
-        # An empty clipboard makes wl-paste exit non-zero. Nothing to restore.
-        pass
 
     subprocess.run(
         [clipboard, "--", text], check=False, env=session_env(), capture_output=True

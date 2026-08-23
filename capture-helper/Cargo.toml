@@ -1,0 +1,18 @@
+[package]
+name = "kwin-capture"
+version = "0.1.0"
+edition = "2021"
+
+# A binary of its own, and that is the entire point. KWin grants ScreenShot2
+# by looking up the calling executable's desktop file, so the permission
+# follows the executable. Granting it to a Python interpreter would hand
+# screen capture to every Python program on the machine; granting it to this
+# hands it to one program that does nothing else.
+[dependencies]
+zbus = "5"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
