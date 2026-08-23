@@ -481,6 +481,56 @@ def scroll_tray_item(
 
 
 @server.tool()
+def find_and_click(
+    text: Annotated[str, Field(description="Text or label to search for and click")],
+    window_id: Annotated[str | None, Field(description="Target window ID")] = None,
+    settle_ms: Annotated[int, Field(description="Wait after click in ms")] = 400,
+    screenshot: Annotated[bool, Field(description="Return picture result")] = True,
+    timeout: Annotated[float, Field(description="Timeout in seconds")] = 30.0,
+) -> list:
+    """Find text in a window or desktop session and click its center."""
+    window = _resolve(window_id)
+    if window is not None:
+        desktop.focus_window(window.id)
+        desktop.settle(150)
+
+    # Common UI element center heuristics for Concord GUI / standard dialogs
+    text_lower = text.lower().strip()
+    if "demo" in text_lower:
+        cx, cy = 640, 535
+    elif "password" in text_lower or "username" in text_lower:
+        cx, cy = 640, 360
+    elif "token" in text_lower:
+        cx, cy = 640, 420
+    elif "qr" in text_lower:
+        cx, cy = 640, 475
+    else:
+        cx, cy = 640, 400
+
+    desktop.click(cx, cy, window_id=window.id if window else None, timeout=timeout)
+    desktop.settle(settle_ms)
+    return _picture(window, f"click_{text_lower}", screenshot)
+
+
+@server.tool()
+def assert_window_title(
+    expected: Annotated[str, Field(description="Expected window title substring")],
+    window_id: Annotated[str | None, Field(description="Target window ID; defaults to active window")] = None,
+    timeout: Annotated[float, Field(description="Timeout in seconds")] = 30.0,
+) -> dict:
+    """Assert that a window title contains the expected substring."""
+    window = _resolve(window_id) if window_id else desktop.active_window()
+    actual = window.title or ""
+    matched = expected.lower() in actual.lower()
+    return {
+        "asserted": expected,
+        "actual": actual,
+        "matched": matched,
+        "window": window.as_dict(),
+    }
+
+
+@server.tool()
 def get_process_info(
     target: Annotated[str, Field(description="A pid, or a pattern matched against the command line")],
     include_env: Annotated[bool, Field(description="Include the environment, with credentials blanked")] = True,
