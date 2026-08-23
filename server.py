@@ -364,11 +364,11 @@ def run_app(
     full_cmd = [executable, *(args or [])]
     target_name = Path(full_cmd[-1] if full_cmd else executable).name
 
-    # Check for existing matching windows if requested
+    # Check for existing matching windows if requested (matching app class strictly to avoid killing IDE)
     existing_windows = [
         w for w in desktop.search_windows(".")
-        if target_name.lower() in (w.cls or "").lower()
-        or target_name.lower() in (w.title or "").lower()
+        if (w.cls or "").lower() == target_name.lower()
+        and "antigravity" not in (w.cls or "").lower()
     ]
 
     if existing_windows:
