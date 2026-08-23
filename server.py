@@ -166,16 +166,67 @@ def drag(
 def type_text(
     text: str,
     window_id: Annotated[str | None, Field(description="Focus this window first")] = None,
+    method: Annotated[
+        str,
+        Field(
+            description=(
+                "auto (paste if possible), paste (layout-proof, but some fields "
+                "refuse it), or keystrokes (real key events, subject to layout)"
+            )
+        ),
+    ] = "auto",
+    layout: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Keyboard layout for keystrokes: us, de, fr. Defaults to the "
+                "session's own layout. Ignored when pasting."
+            )
+        ),
+    ] = None,
     settle_ms: Annotated[int, Field(description="Wait before the screenshot")] = 300,
 ) -> list:
-    """Type into whatever has focus."""
+    """Type into whatever has focus.
+
+    Pastes by default, which no keyboard layout can garble. Use
+    `method="keystrokes"` when something needs real key events - the text is
+    rewritten for the layout first, since key codes name positions on a
+    keyboard rather than letters.
+    """
     window = _resolve(window_id)
     if window is not None:
         desktop.focus_window(window.id)
         desktop.settle(150)
-    desktop.type_text(text)
+    desktop.type_text(text, method=method, layout=layout)
     desktop.settle(settle_ms)
     return [_picture(window, "type")]
+
+
+@server.tool()
+def input_settings() -> dict:
+    """How text will be entered, and what the alternatives are.
+
+    Worth asking before typing into something fussy: it reports which layout
+    this session uses, whether pasting is available, and which layouts the
+    keystroke path knows how to rewrite for.
+    """
+    from linux_gui import layouts
+    from linux_gui.shell import DesktopError as _Error
+    from linux_gui.shell import which
+
+    try:
+        which("wl-copy")
+        can_paste = True
+    except _Error:
+        can_paste = False
+
+    return {
+        "session_layout": layouts.session_layout(),
+        "known_layouts": layouts.known_layouts(),
+        "can_paste": can_paste,
+        "default_method": "paste" if can_paste else "keystrokes",
+        "methods": ["auto", "paste", "keystrokes"],
+    }
 
 
 @server.tool()

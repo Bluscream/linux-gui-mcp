@@ -165,23 +165,45 @@ def scroll(amount: int) -> None:
     _ydotool(["mousemove", "--wheel", "-x", "0", "-y", str(int(amount))])
 
 
-def type_text(text: str, delay_ms: int = 12) -> None:
-    """Enter text, whatever keyboard layout the session uses.
+def type_text(
+    text: str,
+    method: str = "auto",
+    layout: str | None = None,
+    delay_ms: int = 12,
+) -> None:
+    """Enter text.
 
-    Done by putting the text on the clipboard and pasting it, not by sending
-    keystrokes. ydotool speaks raw kernel keycodes, which are positions on the
-    keyboard rather than letters - so on a German layout "typed" arrives as
-    "tzped" and ":" as "Oe". Pasting sidesteps the layout entirely and is
-    faster for anything longer than a few characters.
+    `method` picks how:
 
-    Falls back to keystrokes when no clipboard tool is installed, which is
-    correct for a US layout and visibly wrong for others - better than
-    refusing to type at all.
+    - `auto` pastes when a clipboard tool is available, otherwise types.
+    - `paste` puts the text on the clipboard and presses ctrl+v. Layout-proof
+      and fast, but some fields refuse a paste, and an application watching for
+      key events sees none.
+    - `keystrokes` sends real key events. Subject to the keyboard layout, so
+      the text is rewritten first for `layout` - which defaults to whatever
+      `XKB_DEFAULT_LAYOUT` says this session uses.
+
+    The previous clipboard contents are restored after a paste. A tool that
+    silently ate the clipboard would be a small betrayal every time it ran.
     """
+    method = (method or "auto").strip().lower()
+    if method not in ("auto", "paste", "keystrokes"):
+        raise DesktopError(
+            f"unknown method {method!r}; use auto, paste or keystrokes"
+        )
+
+    if method == "keystrokes":
+        _type_keystrokes(text, layout, delay_ms)
+        return
+
     try:
         clipboard = which("wl-copy")
     except DesktopError:
-        _ydotool(["type", "--key-delay", str(int(delay_ms)), "--", text])
+        if method == "paste":
+            raise DesktopError(
+                "pasting needs wl-clipboard installed; use method='keystrokes'"
+            ) from None
+        _type_keystrokes(text, layout, delay_ms)
         return
 
     previous = None
@@ -196,8 +218,6 @@ def type_text(text: str, delay_ms: int = 12) -> None:
     )
     press("ctrl+v")
     if previous:
-        # Put back what was there. A tool that silently ate the clipboard
-        # would be a small betrayal every time it was used.
         time.sleep(0.2)
         subprocess.run(
             [clipboard, "--", previous],
@@ -205,6 +225,14 @@ def type_text(text: str, delay_ms: int = 12) -> None:
             env=session_env(),
             capture_output=True,
         )
+
+
+def _type_keystrokes(text: str, layout: str | None, delay_ms: int) -> None:
+    """Send real key events, rewritten for the keyboard layout in use."""
+    from . import layouts
+
+    remapped = layouts.to_us_positions(text, layout)
+    _ydotool(["type", "--key-delay", str(int(delay_ms)), "--", remapped])
 
 
 def press(combination: str) -> None:

@@ -41,7 +41,8 @@ Everything below is already present on Bazzite/Kinoite with KDE 6:
 | `screenshot(id?)` | whole screen, or one window |
 | `click(x, y, id?, button, count)` | coordinates are window-relative when an id is given |
 | `drag(from, to, id?)` | moves in steps, so drop targets see the pointer arrive |
-| `type_text(text, id?)` | |
+| `type_text(text, id?, method?, layout?)` | pastes by default; `keystrokes` for real key events |
+| `input_settings()` | which layout, whether pasting is available, what the alternatives are |
 | `press_keys("ctrl+shift+k", id?)` | |
 | `scroll(amount, x?, y?, id?)` | |
 | `wait_for_window(pattern, timeout_s, settle_ms)` | |
@@ -116,12 +117,21 @@ trusting the status would report every closed window as open.
 
 Two things that look like they should just work, and do not:
 
-**Text is pasted, not typed.** ydotool speaks raw kernel keycodes - positions
-on the keyboard, not letters. On a German layout that turns "typed" into
-"tzped" and ":" into "Oe". `type_text` puts the text on the clipboard and
-presses ctrl+v instead, which is layout-independent and faster for anything
-longer than a few characters. The previous clipboard contents are put back
-afterwards.
+**Text is pasted by default, not typed.** ydotool speaks raw kernel keycodes -
+positions on the keyboard, not letters. On a German layout that turns "typed"
+into "tzped" and ":" into "Oe". Pasting is layout-proof and faster, and the
+previous clipboard contents are put back afterwards.
+
+Pasting is not always right: some fields refuse a paste, and an application
+watching for key events sees none. `method="keystrokes"` sends real key events
+and rewrites the text first for `layout` (defaulting to the session's own), so
+that pressing US positions produces the characters asked for. Those tables are
+partial by design - they cover the letter swaps and the punctuation that
+actually moves, and anything unmapped is sent unchanged, because wrong is
+recoverable and missing is not.
+
+`input_settings()` reports which layout is in use, whether pasting is
+available, and which layouts the keystroke path can rewrite for.
 
 **Pointer moves are calibrated at startup.** ydotool's `--absolute` maps onto
 the virtual device's coordinate space and is affected by pointer acceleration
