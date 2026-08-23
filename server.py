@@ -92,7 +92,9 @@ def _point(window: Window | None, x: int, y: int) -> tuple[int, int]:
 
 
 @server.tool()
-def list_windows() -> list[dict]:
+def list_windows(
+    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
+) -> list[dict]:
     """Every window on the desktop, with its id, title, class, pid and geometry."""
     return [window.as_dict() for window in desktop.search_windows(".")]
 
@@ -100,6 +102,7 @@ def list_windows() -> list[dict]:
 @server.tool()
 def find_window(
     pattern: Annotated[str, Field(description="Regular expression against title and class")],
+    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
 ) -> list[dict]:
     """Find windows whose title or class matches a pattern."""
     return [window.as_dict() for window in desktop.search_windows(pattern)]
@@ -110,6 +113,7 @@ def focus_window(
     window_id: Annotated[str, Field(description="Window id from find_window")],
     settle_ms: Annotated[int, Field(description="Wait before looking, in ms")] = 300,
     screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
+    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
 ) -> list:
     """Bring a window to the front and show it."""
     desktop.focus_window(window_id)
@@ -123,6 +127,7 @@ def screenshot(
     window_id: Annotated[str | None, Field(description="Omit for the whole screen")] = None,
     settle_ms: Annotated[int, Field(description="Wait before capturing")] = 0,
     screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
+    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
 ) -> list:
     """Look at the screen, or at one window."""
     desktop.settle(settle_ms)
@@ -139,6 +144,7 @@ def click(
     focus_first: Annotated[bool, Field(description="Raise the window before clicking")] = True,
     settle_ms: Annotated[int, Field(description="Wait before looking, in ms")] = 400,
     screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
+    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
 ) -> list:
     """Click, and show what happened."""
     window = _resolve(window_id)
@@ -165,6 +171,7 @@ def drag(
     button: Annotated[str, Field(description="left, right or middle")] = "left",
     settle_ms: Annotated[int, Field(description="Wait before looking, in ms")] = 500,
     screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
+    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
 ) -> list:
     """Press, move and release - a drag, or a drag and drop."""
     window = _resolve(window_id)
@@ -199,6 +206,7 @@ def type_text(
     ] = None,
     settle_ms: Annotated[int, Field(description="Wait before looking, in ms")] = 300,
     screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
+    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
 ) -> list:
     """Type into whatever has focus.
 
@@ -211,13 +219,15 @@ def type_text(
     if window is not None:
         desktop.focus_window(window.id)
         desktop.settle(150)
-    desktop.type_text(text, method=method, layout=layout)
+    desktop.type_text(text, method=method, layout=layout, timeout=timeout)
     desktop.settle(settle_ms)
     return _picture(window, "type", screenshot)
 
 
 @server.tool()
-def input_settings() -> dict:
+def input_settings(
+    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
+) -> dict:
     """How text will be entered, and what the alternatives are.
 
     Worth asking before typing into something fussy: it reports which layout
@@ -249,6 +259,7 @@ def press_keys(
     window_id: Annotated[str | None, Field(description="Focus this window first")] = None,
     settle_ms: Annotated[int, Field(description="Wait before looking, in ms")] = 300,
     screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
+    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
 ) -> list:
     """Press a keyboard shortcut."""
     window = _resolve(window_id)
@@ -268,6 +279,7 @@ def scroll(
     window_id: str | None = None,
     settle_ms: int = 300,
     screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
+    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
 ) -> list:
     """Scroll the wheel."""
     window = _resolve(window_id)
@@ -285,6 +297,7 @@ def wait_for_window(
     timeout_s: Annotated[float, Field(description="Give up after this long")] = 15.0,
     settle_ms: Annotated[int, Field(description="Let it finish drawing before looking")] = 800,
     screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
+    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
 ) -> list:
     """Wait until a window appears, then show it.
 
@@ -303,6 +316,7 @@ def wait_for_process(
     pattern: Annotated[str, Field(description="Matched against the full command line")],
     timeout_s: float = 15.0,
     settle_ms: int = 800,
+    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
 ) -> dict:
     """Wait until a process exists. Returns its pid, and its windows if it has any.
 
@@ -317,32 +331,38 @@ def wait_for_process(
 
 
 @server.tool()
-def active_window() -> dict:
+def active_window(
+    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
+) -> dict:
     """Which window has focus."""
     return desktop.active_window().as_dict()
 
 
 @server.tool()
 def run_app(
-    command: Annotated[list[str], Field(description='Program and arguments, e.g. ["kate", "notes.md"]')],
+    executable: Annotated[str, Field(description="Program binary or script to run")],
+    args: Annotated[list[str] | None, Field(description="Arguments list for the executable")] = None,
+    env: Annotated[dict[str, str] | None, Field(description="Additional environment variables")] = None,
     cwd: Annotated[str | None, Field(description="Working directory")] = None,
     wait_for_window_s: Annotated[float, Field(description="Wait this long for its window; 0 to skip")] = 20.0,
     screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
     settle_ms: Annotated[int, Field(description="Let it finish drawing before looking")] = 800,
+    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
 ) -> list:
     """Start a graphical program in the desktop session and show its window.
 
-    Runs detached, so it outlives this call. The environment a desktop program
-    needs is passed explicitly rather than inherited - a program started
-    without WAYLAND_DISPLAY does not fail loudly, it simply never appears.
+    Runs detached, so it outlives this call. Environment variables passed in `env`
+    are merged into the desktop session environment.
     """
-    pid = desktop.spawn(command, cwd)
+    full_cmd = [executable, *(args or [])]
+    pid = desktop.spawn(full_cmd, cwd=cwd, env=env)
     if wait_for_window_s <= 0:
         return [{"pid": pid, "windows": []}]
     window = desktop.wait_for_window_of(pid, wait_for_window_s)
     desktop.settle(settle_ms)
     window = desktop.window_info(window.id)
     return [{"pid": pid, "window": window.as_dict()}, *_picture(window, "launched", screenshot)]
+
 
 
 @server.tool()
@@ -352,6 +372,7 @@ def run_in_terminal(
     wait_for_window_s: float = 20.0,
     settle_ms: Annotated[int, Field(description="Let the program draw before looking")] = 1500,
     screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
+    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
 ) -> list:
     """Run a command in a real terminal window, and show it.
 
@@ -382,7 +403,9 @@ def run_in_terminal(
 
 
 @server.tool()
-def list_tray_items() -> list[dict]:
+def list_tray_items(
+    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
+) -> list[dict]:
     """Everything in the system tray, with its id, title and status.
 
     Read over D-Bus rather than from pixels. The tray is a row of identical
@@ -398,6 +421,7 @@ def click_tray_item(
     action: Annotated[str, Field(description="activate (left), secondary (middle) or context (right)")] = "activate",
     settle_ms: Annotated[int, Field(description="Let the menu or window appear")] = 700,
     screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
+    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
 ) -> list:
     """Click a tray item and show what appeared.
 
@@ -418,6 +442,7 @@ def scroll_tray_item(
     orientation: Annotated[str, Field(description="vertical or horizontal")] = "vertical",
     settle_ms: int = 500,
     screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
+    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
 ) -> list:
     """Scroll on a tray item - volume applets use this."""
     item = desktop.tray.find(pattern)
@@ -430,6 +455,7 @@ def scroll_tray_item(
 def get_process_info(
     target: Annotated[str, Field(description="A pid, or a pattern matched against the command line")],
     include_env: Annotated[bool, Field(description="Include the environment, with credentials blanked")] = True,
+    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
 ) -> dict:
     """Everything about a process and what it put on the desktop.
 
@@ -454,3 +480,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

@@ -54,12 +54,15 @@ def ensure_input_daemon() -> None:
     )
 
 
-def _ydotool(args: list[str]) -> None:
+def _ydotool(args: list[str], timeout: float = 30.0) -> None:
     ensure_input_daemon()
     env = {**session_env(), "YDOTOOL_SOCKET": YDOTOOL_SOCKET}
-    done = subprocess.run(
-        ["ydotool", *args], capture_output=True, text=True, env=env, check=False
-    )
+    try:
+        done = subprocess.run(
+            ["ydotool", *args], capture_output=True, text=True, env=env, check=False, timeout=timeout
+        )
+    except subprocess.TimeoutExpired as expired:
+        raise DesktopError(f"ydotool {args[0]} timed out after {timeout}s") from expired
     if done.returncode != 0:
         detail = (done.stderr or done.stdout).strip() or f"exit {done.returncode}"
         raise DesktopError(f"ydotool {args[0]} failed: {detail}")
@@ -171,6 +174,7 @@ def type_text(
     method: str = "auto",
     layout: str | None = None,
     delay_ms: int = 12,
+    timeout: float = 30.0,
 ) -> None:
     """Enter text.
 
@@ -194,7 +198,7 @@ def type_text(
         )
 
     if method == "keystrokes":
-        _type_keystrokes(text, layout, delay_ms)
+        _type_keystrokes(text, layout, delay_ms, timeout=timeout)
         return
 
     try:
@@ -204,39 +208,50 @@ def type_text(
             raise DesktopError(
                 "pasting needs wl-clipboard installed; use method='keystrokes'"
             ) from None
-        _type_keystrokes(text, layout, delay_ms)
+        _type_keystrokes(text, layout, delay_ms, timeout=timeout)
         return
 
-    previous = None
-    # An empty clipboard makes wl-paste exit non-zero. Nothing to restore.
-    with contextlib.suppress(DesktopError):
-        previous = run([which("wl-paste"), "--no-newline"], timeout=5.0)
+    try:
+        previous = None
+        # An empty clipboard makes wl-paste exit non-zero. Nothing to restore.
+        with contextlib.suppress(Exception):
+            previous = run([which("wl-paste"), "--no-newline"], timeout=min(2.0, timeout))
 
-    subprocess.run(
-        [clipboard, "--", text], check=False, env=session_env(), capture_output=True
-    )
-    press("ctrl+v")
-    if previous:
-        time.sleep(0.2)
-        subprocess.run(
-            [clipboard, "--", previous],
-            check=False,
+        p = subprocess.Popen(
+            [clipboard, "--", text],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
             env=session_env(),
-            capture_output=True,
+            start_new_session=True,
         )
+        time.sleep(0.05)
+        press("ctrl+v", timeout=timeout)
+        if previous:
+            time.sleep(0.1)
+            subprocess.Popen(
+                [clipboard, "--", previous],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                env=session_env(),
+                start_new_session=True,
+            )
+    except Exception:
+        _type_keystrokes(text, layout, delay_ms, timeout=timeout)
 
 
-def _type_keystrokes(text: str, layout: str | None, delay_ms: int) -> None:
+def _type_keystrokes(text: str, layout: str | None, delay_ms: int, timeout: float = 30.0) -> None:
     """Send real key events, rewritten for the keyboard layout in use."""
     from . import layouts
 
     remapped = layouts.to_us_positions(text, layout)
-    _ydotool(["type", "--key-delay", str(int(delay_ms)), "--", remapped])
+    _ydotool(["type", "--key-delay", str(int(delay_ms)), "--", remapped], timeout=timeout)
 
 
-def press(combination: str) -> None:
+def press(combination: str, timeout: float = 30.0) -> None:
     """Press a chord such as "ctrl+shift+k" and let it go again."""
     codes = chord(combination)
     downs = [f"{code}:1" for code in codes]
     ups = [f"{code}:0" for code in reversed(codes)]
-    _ydotool(["key", *downs, *ups])
+    _ydotool(["key", *downs, *ups], timeout=timeout)

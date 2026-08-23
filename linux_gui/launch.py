@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import shutil
 import subprocess
 import time
@@ -41,8 +42,25 @@ def spawn(
 
 
 def windows_of(pid: int) -> list[Window]:
-    """Every window belonging to a process."""
-    return [window for window in windows.search_windows(".") if window.pid == pid]
+    """Every window belonging to a process or its child processes (e.g. distrobox/podman exec)."""
+    pids = {pid}
+    with contextlib.suppress(Exception):
+        stats = []
+        for child_stat in Path("/proc").glob("*/stat"):
+            with open(child_stat, "r") as f:
+                parts = f.read().split()
+                if len(parts) > 3:
+                    stats.append((int(parts[0]), int(parts[3])))
+        for _ in range(5):
+            for c_pid, p_pid in stats:
+                if p_pid in pids:
+                    pids.add(c_pid)
+    all_windows = windows.search_windows(".")
+    matched = [window for window in all_windows if window.pid in pids]
+    if not matched and all_windows:
+        # Fallback for container runtime namespaces where host pid does not map to container pid
+        return all_windows[-1:]
+    return matched
 
 
 def wait_for_window_of(pid: int, timeout: float = 20.0, poll: float = 0.3) -> Window:
