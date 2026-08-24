@@ -143,6 +143,14 @@ recoverable and missing is not.
 `input_settings()` reports which layout is in use, whether pasting is
 available, and which layouts the keystroke path can rewrite for.
 
+The layout is asked of `localectl`, not read from `XKB_DEFAULT_LAYOUT`. This
+server is started by an MCP client with almost nothing in its environment, so
+that variable is usually absent - and its absence is indistinguishable from a
+US keyboard, which means text gets typed unremapped and arrives mangled with
+no hint as to why. That is the same shape of bug as a program started without
+`WAYLAND_DISPLAY` never appearing: the environment is not there, and nothing
+says so.
+
 **Pointer moves are calibrated at startup.** ydotool's `--absolute` maps onto
 the virtual device's coordinate space and is affected by pointer acceleration
 - its own help says "you need to disable mouse speed acceleration for correct

@@ -17,6 +17,7 @@ sent unchanged rather than dropped: wrong is recoverable, missing is not.
 from __future__ import annotations
 
 import os
+from functools import cache
 
 # Each entry maps the character wanted to the character whose *US position*
 # produces it on that layout.
@@ -69,16 +70,42 @@ def known_layouts() -> list[str]:
     return sorted(_LAYOUTS)
 
 
+@cache
 def session_layout() -> str:
-    """The layout this session is set to, as far as the environment says.
+    """Which keyboard layout this session uses.
 
-    `XKB_DEFAULT_LAYOUT` is what a Wayland session sets, and it is the only
-    hint available without asking the compositor. Anything unrecognised is
-    treated as US, which is what ydotool assumes anyway.
+    Asked of the system rather than read from the environment. This server is
+    started by an MCP client with almost nothing set, so `XKB_DEFAULT_LAYOUT`
+    is usually absent - and its absence is indistinguishable from a US
+    keyboard, which means text is typed unremapped and comes out mangled with
+    no hint as to why.
+
+    `localectl` is the authority and is always present on a systemd machine;
+    `setxkbmap` is the fallback. Anything unrecognised is treated as US, which
+    is what the underlying tool assumes anyway.
     """
-    raw = (os.environ.get("XKB_DEFAULT_LAYOUT") or "us").split(",")[0].strip().lower()
-    raw = _ALIASES.get(raw, raw)
-    return raw if raw in _LAYOUTS else "us"
+    from .shell import DesktopError, run, which
+
+    candidates = [os.environ.get("XKB_DEFAULT_LAYOUT", "")]
+    for argv, marker in (
+        (["localectl", "status"], "layout:"),
+        (["setxkbmap", "-query"], "layout:"),
+    ):
+        try:
+            reported = run([which(argv[0]), *argv[1:]], timeout=5.0)
+        except (DesktopError, Exception):
+            continue
+        for line in reported.splitlines():
+            if marker in line.lower():
+                candidates.append(line.split(":", 1)[1])
+                break
+
+    for raw in candidates:
+        name = (raw or "").split(",")[0].strip().lower()
+        name = _ALIASES.get(name, name)
+        if name in _LAYOUTS:
+            return name
+    return "us"
 
 
 def to_us_positions(text: str, layout: str | None = None) -> str:
