@@ -47,6 +47,7 @@ Everything below is already present on Bazzite/Kinoite with KDE 6:
 | `list_tray_items()` | id, title, status, owning pid |
 | `tray_action(pattern, action)` | activate, secondary, context, or scroll |
 | `get_process_info(target)` | a process and everything it put on screen |
+| `move_window(id, x?, y?, w?, h?)` | move, resize, or both; reports what the compositor allowed |
 
 ## interact
 
@@ -54,6 +55,12 @@ One tool rather than one per gesture. Everything is optional and happens in a
 fixed order - pointer, scroll, paste, type, keys - so a single call can click
 a field and type into it, which is the usual shape of a UI step and would
 otherwise be two round trips each paying for a screenshot.
+
+**With no `window_id` it acts on the whole screen** - screen coordinates,
+nothing focused first, and a picture of the whole desktop. That is the
+fallback for a window that will not cooperate: an application ignoring input
+aimed at it, an id gone stale, or a menu the compositor never reports as a
+window. Shoot the screen, read the position off it, click there.
 
 Coordinates are **window-relative whenever a `window_id` is given**, and they
 match the screenshot that comes back: the window is captured by its frame
@@ -150,6 +157,28 @@ US keyboard, which means text gets typed unremapped and arrives mangled with
 no hint as to why. That is the same shape of bug as a program started without
 `WAYLAND_DISPLAY` never appearing: the environment is not there, and nothing
 says so.
+
+**Pointer moves are checked, not calculated.** `move_mouse` reads the
+position back and corrects until it is within a pixel or two, and `interact`
+says so when a click lands somewhere other than where it was aimed.
+
+That is worth the round trip because the open-loop version failed silently
+and completely. The scale factor below is measured once and cached; the
+measurement can fail, in which case it fell back to 1.0 and stayed there for
+the life of the process, sending every click to roughly double its intended
+offset with nothing raised. From the outside it looked exactly like an
+application that had stopped accepting input, which is the worst thing a
+tool like this can look like.
+
+The correction is scaled by what the move that just happened actually
+delivered, not by the stored factor - correcting with a wrong factor
+overshoots by the same proportion every time, which oscillates rather than
+converges.
+
+There is also a short pause between arriving somewhere and pressing there.
+Moving into a different window makes the compositor send that window a
+pointer-enter, and a press that beats it is delivered against the previous
+focus.
 
 **Pointer moves are calibrated at startup.** ydotool's `--absolute` maps onto
 the virtual device's coordinate space and is affected by pointer acceleration

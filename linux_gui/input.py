@@ -68,25 +68,92 @@ def _ydotool(args: list[str], timeout: float = 30.0) -> None:
         raise DesktopError(f"ydotool {args[0]} failed: {detail}")
 
 
-def move_mouse(x: int, y: int) -> None:
-    """Put the pointer at an absolute position on the desktop.
+#: How far off a pointer move may land before it is corrected, in pixels.
+#:
+#: One pixel of slack: the compositor rounds, and chasing the last pixel
+#: would cost a round trip to gain nothing a click can tell apart.
+POINTER_TOLERANCE = 2
+
+#: How many corrections to attempt before giving up and reporting where it is.
+POINTER_ATTEMPTS = 3
+
+
+def move_mouse(x: int, y: int) -> tuple[int, int]:
+    """Put the pointer at an absolute position, and confirm it got there.
+
+    Returns where it actually landed, which is not always where it was sent:
+    ydotool speaks in relative movements scaled by the user's pointer
+    acceleration, so an absolute position is an estimate until it is read
+    back.
 
     Done as a slam into the top-left corner followed by a relative move,
     rather than with ydotool's own `--absolute`. That mode maps onto the
-    virtual device's coordinate space and is affected by pointer
-    acceleration - ydotool's own help says as much - so on a multi-monitor
-    desktop it lands somewhere near the target rather than on it.
+    virtual device's coordinate space and is affected by acceleration -
+    ydotool's own help says as much - so on a multi-monitor desktop it lands
+    somewhere near the target rather than on it.
 
-    A large negative relative move is clamped by the compositor at the
-    corner, which gives a known origin no matter where the pointer started.
-    From there the move is exact.
+    The estimate is then corrected against a reading. Crucially the
+    correction is scaled by what the move that just happened actually
+    delivered, not by the stored factor: correcting with a wrong factor
+    overshoots by the same proportion every time, which oscillates instead of
+    converging. Measuring per move is also what makes a stale factor
+    harmless - it used to fall back to 1.0 after one failed calibration and
+    stay cached for the life of the server, sending every click to roughly
+    double its intended offset with nothing raised.
     """
     scale_x, scale_y = _pointer_scale()
+    units_x, units_y = round(x / scale_x), round(y / scale_y)
+
     _home_pointer()
-    if x or y:
-        _ydotool(
-            ["mousemove", "-x", str(round(x / scale_x)), "-y", str(round(y / scale_y))]
-        )
+    if units_x or units_y:
+        _ydotool(["mousemove", "-x", str(units_x), "-y", str(units_y)])
+
+    # The pointer started at the corner, so where it is now is what those
+    # units delivered.
+    origin = (0, 0)
+    sent = (units_x, units_y)
+
+    landed = (x, y)
+    for _ in range(POINTER_ATTEMPTS):
+        try:
+            landed = _read_pointer()
+        except DesktopError:
+            # Position cannot be read at all; the open-loop estimate is the
+            # best on offer, and saying so is the caller's business.
+            return x, y
+
+        error = (x - landed[0], y - landed[1])
+        if abs(error[0]) <= POINTER_TOLERANCE and abs(error[1]) <= POINTER_TOLERANCE:
+            return landed
+
+        moved = (landed[0] - origin[0], landed[1] - origin[1])
+        scale_x = _observed_scale(moved[0], sent[0], scale_x)
+        scale_y = _observed_scale(moved[1], sent[1], scale_y)
+
+        sent = (round(error[0] / scale_x), round(error[1] / scale_y))
+        if not sent[0] and not sent[1]:
+            # Closer than one unit of the device can express.
+            return landed
+
+        origin = landed
+        try:
+            _ydotool(["mousemove", "-x", str(sent[0]), "-y", str(sent[1])])
+        except DesktopError:
+            return landed
+
+    return landed
+
+
+def _observed_scale(moved: int, sent: int, fallback: float) -> float:
+    """Pixels per unit, as the last move actually delivered them.
+
+    Too small a movement says nothing useful - rounding dominates - so the
+    previous figure is kept rather than replaced with noise.
+    """
+    if abs(sent) < 5 or moved == 0:
+        return fallback
+    observed = moved / sent
+    return observed if observed > 0 else fallback
 
 
 def _home_pointer() -> None:
@@ -113,11 +180,11 @@ def _pointer_scale() -> tuple[float, float]:
     Pointer acceleration means a relative move of 1000 does not move the
     pointer 1000 pixels - on this desktop it moves about twice that. The
     factor depends on the user's acceleration settings, so it is measured
-    once rather than guessed, by moving a known distance and reading back
-    where the pointer actually ended up.
+    once rather than guessed.
 
-    Falls back to 1.0 if the position cannot be read, which leaves behaviour
-    no worse than not calibrating at all.
+    Only ever a starting estimate now: `move_mouse` reads the position back
+    and corrects. A wrong answer here costs an extra correction, where it
+    used to cost every click for the life of the process.
     """
     probe_x, probe_y = 500, 300
     try:
@@ -136,10 +203,20 @@ def _pointer_scale() -> tuple[float, float]:
 _BUTTONS = {"left": 0x00, "right": 0x01, "middle": 0x02}
 
 
+#: Pause between arriving somewhere and pressing there, in seconds.
+#:
+#: Moving the pointer into a different window makes the compositor send that
+#: window a pointer-enter, and a press that arrives before the window has
+#: taken it is delivered against the previous focus - so the click lands
+#: somewhere else, or nowhere, with nothing to show it went wrong.
+CLICK_SETTLE = 0.06
+
+
 def click(button: str = "left", count: int = 1) -> None:
     code = _BUTTONS.get(button.lower())
     if code is None:
         raise DesktopError(f"unknown button {button!r}; use left, right or middle")
+    time.sleep(CLICK_SETTLE)
     # 0x40 is press, 0x80 release; together they are one click.
     for _ in range(max(1, count)):
         _ydotool(["click", f"0x{0x40 | code:02X}", f"0x{0x80 | code:02X}"])

@@ -128,6 +128,75 @@ def focus_window(window_id: str) -> None:
     _kdotool(["windowactivate", window_id])
 
 
+def move_window(
+    window_id: str,
+    x: int | None = None,
+    y: int | None = None,
+    width: int | None = None,
+    height: int | None = None,
+) -> Window:
+    """Move a window, resize it, or both, and report where it ended up.
+
+    Each part is optional, so a caller can move without resizing or the other
+    way round. The result is read back rather than assumed: a tiling rule, a
+    size hint or a maximised state can all refuse or adjust what was asked
+    for, and a caller that believed the request would then compute
+    coordinates against a window that is not that shape.
+    """
+    wanted: dict[str, int] = {}
+
+    if x is not None or y is not None:
+        current = window_info(window_id)
+        target_x = current.x if x is None else x
+        target_y = current.y if y is None else y
+        _kdotool(["windowmove", window_id, str(target_x), str(target_y)])
+        wanted["x"], wanted["y"] = target_x, target_y
+
+    if width is not None or height is not None:
+        current = window_info(window_id)
+        target_w = current.width if width is None else width
+        target_h = current.height if height is None else height
+        if target_w < 1 or target_h < 1:
+            raise DesktopError(
+                f"a window cannot be {target_w}x{target_h}; both sides must be at least 1"
+            )
+        _kdotool(["windowsize", window_id, str(target_w), str(target_h)])
+        wanted["width"], wanted["height"] = target_w, target_h
+
+    return _settled_geometry(window_id, wanted)
+
+
+#: How long to wait for the compositor to apply a geometry change.
+GEOMETRY_TIMEOUT = 1.5
+
+
+def _settled_geometry(window_id: str, wanted: dict[str, int]) -> Window:
+    """Read the window back once the compositor has caught up.
+
+    kdotool returns as soon as KWin has been told, not once it has acted, so
+    reading immediately returns the previous geometry - which made a resize
+    look like it had been ignored while the next call reported the last
+    one's result.
+
+    Gives up quietly and returns whatever is there: a window may legitimately
+    refuse a size, and reporting the truth is more use than an error.
+    """
+    deadline = time.monotonic() + GEOMETRY_TIMEOUT
+    while True:
+        window = window_info(window_id)
+        current = {
+            "x": window.x,
+            "y": window.y,
+            "width": window.width,
+            "height": window.height,
+        }
+        if all(current[key] == value for key, value in wanted.items()):
+            return window
+        if time.monotonic() >= deadline:
+            return window
+        time.sleep(0.05)
+
+
 def wait_for_window(pattern: str, timeout: float = 15.0, poll: float = 0.25) -> Window:
     deadline = time.monotonic() + timeout
     while True:

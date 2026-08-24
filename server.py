@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Annotated
 
 from mcp.server.mcpserver import MCPServer
-from mcp.types import ImageContent
+from mcp.types import ImageContent, TextContent
 from pydantic import Field
 
 import linux_gui as desktop
@@ -47,6 +47,20 @@ server = MCPServer(
 )
 
 SHOTS = Path(os.environ.get("LINUX_GUI_MCP_SHOTS", Path(tempfile.gettempdir()) / "linux-gui-mcp"))
+
+
+#: How far a pointer may land from where it was asked before it is worth
+#: mentioning, in pixels.
+#:
+#: A pixel or two is rounding. Anything past that and the click may have gone
+#: to a different control than the caller meant, which is worth knowing about
+#: even though the click itself still happened.
+POINTER_DRIFT_LIMIT = 3
+
+
+def _notes(notes: list[str]) -> list:
+    """Anything the caller should know, ahead of the picture."""
+    return [TextContent(type="text", text=note) for note in notes]
 
 
 def _picture(window: Window | None, tag: str, wanted: bool = True) -> list:
@@ -127,7 +141,7 @@ def screenshot(
 
 @server.tool()
 def interact(
-    window_id: Annotated[str | None, Field(description="Window to act on; coordinates become relative to it")] = None,
+    window_id: Annotated[str | None, Field(description="Window to act on; coordinates become relative to it. Omit to act on the whole screen, which is the fallback when a window will not respond")] = None,
     x: Annotated[int | None, Field(description="X, relative to the window when one is given")] = None,
     y: Annotated[int | None, Field(description="Y, relative to the window when one is given")] = None,
     to_x: Annotated[int | None, Field(description="Drag to this X. Needs x and y as the start")] = None,
@@ -144,7 +158,7 @@ def interact(
     screenshot: Annotated[bool, Field(description="Return a picture; costs about 0.2s")] = True,
     timeout: Annotated[float, Field(description="Give up after this long, in seconds")] = 30.0,
 ) -> list:
-    """Do things to a window: click, drag, scroll, paste, type, press keys.
+    """Do things to a window - or to the screen, when no window is named.
 
     Everything is optional and they happen in that order, so one call can click
     a field and then type into it - which is the usual shape of a UI step and
@@ -153,12 +167,20 @@ def interact(
     With `window_id` and no action at all, this just focuses the window and
     shows it.
 
+    **Without `window_id` this acts on the whole screen**: coordinates are
+    screen coordinates, nothing is focused first, and the picture is of the
+    whole desktop. That is the fallback when a window will not cooperate -
+    an application that ignores input aimed at it, a window whose id has gone
+    stale, a popup or menu the compositor does not report as a window at all.
+    Take a full-screen shot, read the position off it, and click there.
+
     Pasting and typing are different on purpose. `paste_text` goes through the
     clipboard, which no keyboard layout can garble and which is fast; but some
     fields refuse a paste, and an application watching for key events sees
     none. `type_text` sends real keystrokes, rewritten for the layout, because
     key codes name positions on a keyboard rather than letters.
     """
+    notes: list[str] = []
     window = _resolve(window_id)
     if window is not None and focus_first:
         desktop.focus_window(window.id)
@@ -173,7 +195,18 @@ def interact(
             end = _point(window, to_x, to_y)
             desktop.drag(start[0], start[1], end[0], end[1], button)
         else:
-            desktop.move_mouse(start[0], start[1])
+            landed = desktop.move_mouse(start[0], start[1])
+            drift = (landed[0] - start[0], landed[1] - start[1])
+            if max(abs(drift[0]), abs(drift[1])) > POINTER_DRIFT_LIMIT:
+                # Reported rather than raised: the click has value even from
+                # slightly the wrong place, and an agent that can see it
+                # missed can look and try again. Silence here is what made a
+                # mis-scaled pointer look like an application ignoring input.
+                notes.append(
+                    f"pointer asked for {start[0]},{start[1]} but landed at "
+                    f"{landed[0]},{landed[1]} ({drift[0]:+d},{drift[1]:+d}); "
+                    "the click went to the second of those"
+                )
             if click_count > 0:
                 desktop.click(button, click_count)
     elif to_x is not None or to_y is not None:
@@ -189,7 +222,52 @@ def interact(
         desktop.press(keys)
 
     desktop.settle(settle_ms)
-    return _picture(window, "interact", screenshot)
+    return _notes(notes) + _picture(window, "interact", screenshot)
+
+
+@server.tool()
+def move_window(
+    window_id: Annotated[str, Field(description="Window to move or resize")],
+    x: Annotated[int | None, Field(description="New left edge; omit to leave where it is")] = None,
+    y: Annotated[int | None, Field(description="New top edge; omit to leave where it is")] = None,
+    width: Annotated[int | None, Field(description="New width; omit to keep the current one")] = None,
+    height: Annotated[int | None, Field(description="New height; omit to keep the current one")] = None,
+    settle_ms: Annotated[int, Field(description="Wait before the screenshot, in ms")] = 250,
+    screenshot: Annotated[bool, Field(description="Return a picture of the result")] = True,
+) -> list:
+    """Move a window, resize it, or both.
+
+    Each part is optional, so this can move without resizing or the other way
+    round. Useful for making a window big enough that what you need is on
+    screen at all, rather than scrolling to it.
+
+    The geometry is read back after the compositor has applied it, and
+    reported: a window may refuse a size, or round it to a step, and a caller
+    that assumed otherwise would then be computing coordinates against a
+    shape the window is not.
+    """
+    window = _resolve(window_id)
+    if window is None:
+        raise DesktopError("move_window needs a window id")
+
+    result = desktop.move_window(window_id, x, y, width, height)
+
+    asked = {"x": x, "y": y, "width": width, "height": height}
+    got = {"x": result.x, "y": result.y, "width": result.width, "height": result.height}
+    refused = [
+        f"{name} {value} -> {got[name]}"
+        for name, value in asked.items()
+        if value is not None and got[name] != value
+    ]
+
+    notes = [
+        f"window is now {got['width']}x{got['height']} at {got['x']},{got['y']}"
+    ]
+    if refused:
+        notes.append("the compositor adjusted: " + ", ".join(refused))
+
+    desktop.settle(settle_ms)
+    return _notes(notes) + _picture(result, "move", screenshot)
 
 
 @server.tool()
