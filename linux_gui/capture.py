@@ -33,7 +33,20 @@ def _kwin_capture(path: Path, window: Window | None) -> bool:
         if window is not None:
             focus_window(window.id)
             settle(120)
-            run([str(HELPER), "window", str(path)], timeout=20.0)
+            # The window's own rectangle, not "the active window". KWin's
+            # active-window capture returns the client area, which excludes
+            # the titlebar - so the image and the geometry did not share an
+            # origin, and every coordinate read off a screenshot came back
+            # about 28 pixels too high. Capturing the frame rectangle makes
+            # image (0,0) the same point as window-relative (0,0).
+            run(
+                [
+                    str(HELPER), "area", str(path),
+                    str(window.x), str(window.y),
+                    str(window.width), str(window.height),
+                ],
+                timeout=20.0,
+            )
         else:
             run([str(HELPER), "screen", str(path)], timeout=20.0)
     except DesktopError:

@@ -35,10 +35,14 @@ from linux_gui import DesktopError, Window
 server = MCPServer(
     name="linux-gui",
     instructions=(
-        "Drive the local KDE/Wayland desktop: find and focus windows, click, "
-        "drag, type, press shortcuts, and see the result. Actions return a "
-        "screenshot of what they affected. Prefer window-relative coordinates "
-        "so a moved window does not send a click somewhere unintended."
+        "Drive the local KDE/Wayland desktop. `find_window` to see what is "
+        "open, then `interact` to do things to it - clicking, dragging, "
+        "typing, shortcuts and scrolling are all one call, and they happen in "
+        "that order, so a single call can click a field and type into it. "
+        "Actions return a screenshot of what they affected; pass "
+        "screenshot=false to skip it when you do not need to look. Prefer "
+        "window-relative coordinates so a moved window does not send a click "
+        "somewhere unintended."
     ),
 )
 
@@ -77,7 +81,7 @@ def _resolve(window_id: str | None) -> Window | None:
         ) or "none"
         raise DesktopError(
             f"no window {window_id!r} is open. Currently open: {listed}. "
-            "Call find_window or list_windows for ids that are still valid."
+            "Call find_window for ids that are still valid."
         )
     return desktop.window_info(window_id)
 
@@ -95,142 +99,101 @@ def _point(window: Window | None, x: int, y: int) -> tuple[int, int]:
 
 
 @server.tool()
-def list_windows(
-    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
-) -> list[dict]:
-    """Every window on the desktop, with its id, title, class, pid and geometry."""
-    return [window.as_dict() for window in desktop.search_windows(".")]
-
-
-@server.tool()
 def find_window(
-    pattern: Annotated[str, Field(description="Regular expression against title and class")],
-    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
+    pattern: Annotated[str, Field(description="Regex against title and class. '.' matches everything")] = ".",
 ) -> list[dict]:
-    """Find windows whose title or class matches a pattern."""
+    """Every open window matching a pattern: id, title, class, pid, geometry.
+
+    The default matches everything, so this doubles as "what is open?".
+    """
     return [window.as_dict() for window in desktop.search_windows(pattern)]
 
 
 @server.tool()
-def focus_window(
-    window_id: Annotated[str, Field(description="Window id from find_window")],
-    settle_ms: Annotated[int, Field(description="Wait before looking, in ms")] = 300,
-    screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
-    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
-) -> list:
-    """Bring a window to the front and show it."""
-    desktop.focus_window(window_id)
-    desktop.settle(settle_ms)
-    window = desktop.window_info(window_id)
-    return [window.as_dict(), *_picture(window, "focus", screenshot)]
+def active_window() -> dict:
+    """Which window has focus."""
+    return desktop.active_window().as_dict()
 
 
 @server.tool()
 def screenshot(
     window_id: Annotated[str | None, Field(description="Omit for the whole screen")] = None,
-    settle_ms: Annotated[int, Field(description="Wait before capturing")] = 0,
-    screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
-    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
+    settle_ms: Annotated[int, Field(description="Wait before capturing, in ms")] = 0,
 ) -> list:
     """Look at the screen, or at one window."""
     desktop.settle(settle_ms)
-    return _picture(_resolve(window_id), "shot", screenshot)
+    return _picture(_resolve(window_id), "shot")
 
 
 @server.tool()
-def click(
-    x: Annotated[int, Field(description="X, relative to the window if one is named")],
-    y: Annotated[int, Field(description="Y, relative to the window if one is named")],
-    window_id: Annotated[str | None, Field(description="Click inside this window")] = None,
+def interact(
+    window_id: Annotated[str | None, Field(description="Window to act on; coordinates become relative to it")] = None,
+    x: Annotated[int | None, Field(description="X, relative to the window when one is given")] = None,
+    y: Annotated[int | None, Field(description="Y, relative to the window when one is given")] = None,
+    to_x: Annotated[int | None, Field(description="Drag to this X. Needs x and y as the start")] = None,
+    to_y: Annotated[int | None, Field(description="Drag to this Y")] = None,
     button: Annotated[str, Field(description="left, right or middle")] = "left",
-    count: Annotated[int, Field(description="2 for a double click")] = 1,
-    focus_first: Annotated[bool, Field(description="Raise the window before clicking")] = True,
-    settle_ms: Annotated[int, Field(description="Wait before looking, in ms")] = 400,
-    screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
-    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
+    click_count: Annotated[int, Field(description="0 moves without clicking, 1 clicks, 2 double-clicks")] = 0,
+    paste_text: Annotated[str | None, Field(description="Text to paste. Layout-proof; some fields refuse a paste")] = None,
+    type_text: Annotated[str | None, Field(description="Text to send as real keystrokes, rewritten for the layout")] = None,
+    keys: Annotated[str | None, Field(description="A chord such as 'ctrl+s' or 'alt+f4'")] = None,
+    layout: Annotated[str | None, Field(description="Keyboard layout for type_text: us, de, fr. Defaults to the session's")] = None,
+    scroll_amount: Annotated[int, Field(description="Wheel delta; positive scrolls down")] = 0,
+    focus_first: Annotated[bool, Field(description="Raise the window before acting")] = True,
+    settle_ms: Annotated[int, Field(description="Wait before the screenshot, in ms")] = 400,
+    screenshot: Annotated[bool, Field(description="Return a picture; costs about 0.2s")] = True,
+    timeout: Annotated[float, Field(description="Give up after this long, in seconds")] = 30.0,
 ) -> list:
-    """Click, and show what happened."""
+    """Do things to a window: click, drag, scroll, paste, type, press keys.
+
+    Everything is optional and they happen in that order, so one call can click
+    a field and then type into it - which is the usual shape of a UI step and
+    would otherwise be two round trips, each paying for a screenshot.
+
+    With `window_id` and no action at all, this just focuses the window and
+    shows it.
+
+    Pasting and typing are different on purpose. `paste_text` goes through the
+    clipboard, which no keyboard layout can garble and which is fast; but some
+    fields refuse a paste, and an application watching for key events sees
+    none. `type_text` sends real keystrokes, rewritten for the layout, because
+    key codes name positions on a keyboard rather than letters.
+    """
     window = _resolve(window_id)
     if window is not None and focus_first:
         desktop.focus_window(window.id)
         desktop.settle(150)
-        # Re-read: focusing can move or resize a window, and a click placed
-        # from stale geometry lands somewhere else entirely.
+        # Re-read: focusing can move or resize a window, and coordinates taken
+        # from stale geometry land somewhere else entirely.
         window = desktop.window_info(window.id)
-    screen_x, screen_y = _point(window, x, y)
-    desktop.move_mouse(screen_x, screen_y)
-    desktop.click(button, count)
+
+    if x is not None and y is not None:
+        start = _point(window, x, y)
+        if to_x is not None and to_y is not None:
+            end = _point(window, to_x, to_y)
+            desktop.drag(start[0], start[1], end[0], end[1], button)
+        else:
+            desktop.move_mouse(start[0], start[1])
+            if click_count > 0:
+                desktop.click(button, click_count)
+    elif to_x is not None or to_y is not None:
+        raise DesktopError("a drag needs x and y as its starting point")
+
+    if scroll_amount:
+        desktop.scroll(scroll_amount)
+    if paste_text is not None:
+        desktop.type_text(paste_text, method="paste", layout=layout, timeout=timeout)
+    if type_text is not None:
+        desktop.type_text(type_text, method="keystrokes", layout=layout, timeout=timeout)
+    if keys is not None:
+        desktop.press(keys)
+
     desktop.settle(settle_ms)
-    return _picture(window, "click", screenshot)
+    return _picture(window, "interact", screenshot)
 
 
 @server.tool()
-def drag(
-    from_x: int,
-    from_y: int,
-    to_x: int,
-    to_y: int,
-    window_id: Annotated[str | None, Field(description="Coordinates inside this window")] = None,
-    button: Annotated[str, Field(description="left, right or middle")] = "left",
-    settle_ms: Annotated[int, Field(description="Wait before looking, in ms")] = 500,
-    screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
-    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
-) -> list:
-    """Press, move and release - a drag, or a drag and drop."""
-    window = _resolve(window_id)
-    start = _point(window, from_x, from_y)
-    end = _point(window, to_x, to_y)
-    desktop.drag(start[0], start[1], end[0], end[1], button)
-    desktop.settle(settle_ms)
-    return _picture(window, "drag", screenshot)
-
-
-@server.tool()
-def type_text(
-    text: str,
-    window_id: Annotated[str | None, Field(description="Focus this window first")] = None,
-    method: Annotated[
-        str,
-        Field(
-            description=(
-                "auto (paste if possible), paste (layout-proof, but some fields "
-                "refuse it), or keystrokes (real key events, subject to layout)"
-            )
-        ),
-    ] = "auto",
-    layout: Annotated[
-        str | None,
-        Field(
-            description=(
-                "Keyboard layout for keystrokes: us, de, fr. Defaults to the "
-                "session's own layout. Ignored when pasting."
-            )
-        ),
-    ] = None,
-    settle_ms: Annotated[int, Field(description="Wait before looking, in ms")] = 300,
-    screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
-    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
-) -> list:
-    """Type into whatever has focus.
-
-    Pastes by default, which no keyboard layout can garble. Use
-    `method="keystrokes"` when something needs real key events - the text is
-    rewritten for the layout first, since key codes name positions on a
-    keyboard rather than letters.
-    """
-    window = _resolve(window_id)
-    if window is not None:
-        desktop.focus_window(window.id)
-        desktop.settle(150)
-    desktop.type_text(text, method=method, layout=layout, timeout=timeout)
-    desktop.settle(settle_ms)
-    return _picture(window, "type", screenshot)
-
-
-@server.tool()
-def input_settings(
-    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
-) -> dict:
+def input_settings() -> dict:
     """How text will be entered, and what the alternatives are.
 
     Worth asking before typing into something fussy: it reports which layout
@@ -252,119 +215,21 @@ def input_settings(
         "known_layouts": layouts.known_layouts(),
         "can_paste": can_paste,
         "default_method": "paste" if can_paste else "keystrokes",
-        "methods": ["auto", "paste", "keystrokes"],
     }
 
 
 @server.tool()
-def press_keys(
-    keys: Annotated[str, Field(description='A chord such as "ctrl+s" or "alt+f4"')],
-    window_id: Annotated[str | None, Field(description="Focus this window first")] = None,
-    settle_ms: Annotated[int, Field(description="Wait before looking, in ms")] = 300,
-    screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
-    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
-) -> list:
-    """Press a keyboard shortcut."""
-    window = _resolve(window_id)
-    if window is not None:
-        desktop.focus_window(window.id)
-        desktop.settle(150)
-    desktop.press(keys)
-    desktop.settle(settle_ms)
-    return _picture(window, "keys", screenshot)
-
-
-@server.tool()
-def interact(
-    window_id: Annotated[str | None, Field(description="Window id from find_window or list_windows")] = None,
-    x: Annotated[int | None, Field(description="X coordinate, relative to window if specified")] = None,
-    y: Annotated[int | None, Field(description="Y coordinate, relative to window if specified")] = None,
-    to_x: Annotated[int | None, Field(description="End X coordinate for drag action")] = None,
-    to_y: Annotated[int | None, Field(description="End Y coordinate for drag action")] = None,
-    button: Annotated[str, Field(description="Mouse button for click or drag: left, right, middle")] = "left",
-    click_count: Annotated[int, Field(description="Click count (e.g. 1 for single click, 2 for double click)")] = 0,
-    paste_text: Annotated[str | None, Field(description="Text to paste directly into focus/target field")] = None,
-    type_text: Annotated[str | None, Field(description="Text to send as simulated keystrokes")] = None,
-    keys: Annotated[str | None, Field(description="Key chord shortcut to press (e.g. 'ctrl+s', 'enter', 'tab')")] = None,
-    layout: Annotated[str | None, Field(description="Keyboard layout for type_text: us, de, fr")] = None,
-    scroll_amount: Annotated[int, Field(description="Scroll wheel delta: positive scrolls down, negative up")] = 0,
-    focus_first: Annotated[bool, Field(description="Raise and focus window before performing interactions")] = True,
-    settle_ms: Annotated[int, Field(description="Wait after interactions before returning screenshot, in ms")] = 400,
-    screenshot: Annotated[bool, Field(description="Return a picture of the resulting window state")] = True,
-    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
-) -> list:
-    """Perform one or multiple combined GUI actions (click, drag, type, paste, key shortcut, scroll)."""
-    window = _resolve(window_id)
-
-    if window is not None and focus_first:
-        desktop.focus_window(window.id)
-        desktop.settle(150)
-        window = desktop.window_info(window.id)
-
-    # 1. Pointer positioning, click, or drag
-    if x is not None and y is not None:
-        screen_x, screen_y = _point(window, x, y)
-        if to_x is not None and to_y is not None:
-            end_x, end_y = _point(window, to_x, to_y)
-            desktop.drag(screen_x, screen_y, end_x, end_y, button)
-        else:
-            desktop.move_mouse(screen_x, screen_y)
-            if click_count > 0:
-                desktop.click(button, click_count)
-
-    # 2. Scroll wheel
-    if scroll_amount != 0:
-        desktop.scroll(scroll_amount)
-
-    # 3. Paste text
-    if paste_text is not None:
-        desktop.type_text(paste_text, method="paste", layout=layout, timeout=timeout)
-
-    # 4. Type text as keystrokes
-    if type_text is not None:
-        desktop.type_text(type_text, method="keystrokes", layout=layout, timeout=timeout)
-
-    # 5. Press keyboard shortcut / chord
-    if keys is not None:
-        desktop.press(keys)
-
-    desktop.settle(settle_ms)
-    return _picture(window, "interact", screenshot)
-
-
-@server.tool()
-def scroll(
-    amount: Annotated[int, Field(description="Positive scrolls down, negative up")],
-    x: Annotated[int | None, Field(description="Point here first")] = None,
-    y: int | None = None,
-    window_id: str | None = None,
-    settle_ms: int = 300,
-    screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
-    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
-) -> list:
-    """Scroll the wheel."""
-    window = _resolve(window_id)
-    if x is not None and y is not None:
-        screen_x, screen_y = _point(window, x, y)
-        desktop.move_mouse(screen_x, screen_y)
-    desktop.scroll(amount)
-    desktop.settle(settle_ms)
-    return _picture(window, "scroll", screenshot)
-
-
-@server.tool()
 def wait_for_window(
-    pattern: Annotated[str, Field(description="Regular expression against title and class")],
+    pattern: Annotated[str, Field(description="Regex against title and class")],
     timeout_s: Annotated[float, Field(description="Give up after this long")] = 15.0,
     settle_ms: Annotated[int, Field(description="Let it finish drawing before looking")] = 800,
-    screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
-    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
+    screenshot: Annotated[bool, Field(description="Return a picture")] = True,
 ) -> list:
     """Wait until a window appears, then show it.
 
     The settle matters more here than anywhere: a window exists as soon as it
-    is mapped, which is well before it has drawn anything. Screenshotting the
-    instant it appears reliably captures an empty rectangle.
+    is mapped, which is well before it has drawn anything, so capturing the
+    instant it appears reliably yields an empty rectangle.
     """
     window = desktop.wait_for_window(pattern, timeout_s)
     desktop.settle(settle_ms)
@@ -375,15 +240,14 @@ def wait_for_window(
 @server.tool()
 def wait_for_process(
     pattern: Annotated[str, Field(description="Matched against the full command line")],
-    timeout_s: float = 15.0,
-    settle_ms: int = 800,
-    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
+    timeout_s: Annotated[float, Field(description="Give up after this long")] = 15.0,
+    settle_ms: Annotated[int, Field(description="Wait before reporting, in ms")] = 800,
 ) -> dict:
-    """Wait until a process exists. Returns its pid, and its windows if it has any.
+    """Wait until a process exists. Returns its pid and any windows it owns.
 
     Windows are reported too because the usual reason for waiting on a process
-    is to then drive it, and a process that is running with no window yet is
-    the state where driving it fails confusingly.
+    is to then drive it, and a process running with no window yet is the state
+    where driving it fails confusingly.
     """
     pid = desktop.wait_for_process(pattern, timeout_s)
     desktop.settle(settle_ms)
@@ -392,59 +256,52 @@ def wait_for_process(
 
 
 @server.tool()
-def active_window(
-    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
-) -> dict:
-    """Which window has focus."""
-    return desktop.active_window().as_dict()
-
-
-@server.tool()
 def run_app(
-    executable: Annotated[str, Field(description="Program binary or script to run")],
-    args: Annotated[list[str] | None, Field(description="Arguments list for the executable")] = None,
-    env: Annotated[dict[str, str] | None, Field(description="Additional environment variables")] = None,
+    executable: Annotated[str, Field(description="Program to run")],
+    args: Annotated[list[str] | None, Field(description="Arguments")] = None,
+    env: Annotated[dict[str, str] | None, Field(description="Extra environment variables")] = None,
     cwd: Annotated[str | None, Field(description="Working directory")] = None,
-    focus_if_running: Annotated[
-        bool, Field(description="If a matching window is already running, focus and return it instead of spawning a new instance")
-    ] = True,
-    restart_if_running: Annotated[
-        bool, Field(description="If a matching window/process is already running, terminate it before spawning a fresh instance")
-    ] = False,
+    focus_if_running: Annotated[bool, Field(description="Focus an existing window instead of starting another")] = True,
+    restart_if_running: Annotated[bool, Field(description="Ask an existing instance to quit first")] = False,
     wait_for_window_s: Annotated[float, Field(description="Wait this long for its window; 0 to skip")] = 20.0,
-    screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
     settle_ms: Annotated[int, Field(description="Let it finish drawing before looking")] = 800,
-    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
+    screenshot: Annotated[bool, Field(description="Return a picture")] = True,
 ) -> list:
     """Start a graphical program in the desktop session and show its window.
 
-    Runs detached, so it outlives this call. Environment variables passed in `env`
-    are merged into the desktop session environment.
+    Runs detached, so it outlives this call. The session environment is passed
+    explicitly rather than inherited: a program started without
+    WAYLAND_DISPLAY does not fail loudly, it simply never appears.
     """
-    full_cmd = [executable, *(args or [])]
-    target_name = Path(full_cmd[-1] if full_cmd else executable).name
-
-    # Check for existing matching windows if requested (matching app class strictly to avoid killing IDE)
-    existing_windows = [
+    # From the executable, never from the arguments. Taking the last argument
+    # meant `run_app("kwrite", ["notes.md"])` looked for a window class called
+    # "notes.md" - so the already-running check silently never matched, and
+    # with restart_if_running it could have matched something else entirely.
+    target_name = Path(executable).name
+    running = [
         w for w in desktop.search_windows(".")
         if (w.cls or "").lower() == target_name.lower()
-        and "antigravity" not in (w.cls or "").lower()
     ]
 
-    if existing_windows:
-        if restart_if_running:
-            for w in existing_windows:
+    if running and restart_if_running:
+        for window in running:
+            if window.pid:
+                # SIGTERM, not SIGKILL: an application being closed should get
+                # the chance to save.
                 with contextlib.suppress(Exception):
-                    os.kill(w.pid, signal.SIGTERM)
-            time.sleep(0.3)
-        elif focus_if_running:
-            window = existing_windows[0]
-            desktop.focus_window(window.id)
-            desktop.settle(settle_ms)
-            window = desktop.window_info(window.id)
-            return [{"pid": window.pid, "window": window.as_dict(), "focused_existing": True}, *_picture(window, "focused", screenshot)]
+                    os.kill(window.pid, signal.SIGTERM)
+        time.sleep(0.3)
+    elif running and focus_if_running:
+        window = running[0]
+        desktop.focus_window(window.id)
+        desktop.settle(settle_ms)
+        window = desktop.window_info(window.id)
+        return [
+            {"pid": window.pid, "window": window.as_dict(), "focused_existing": True},
+            *_picture(window, "focused", screenshot),
+        ]
 
-    pid = desktop.spawn(full_cmd, cwd=cwd, env=env)
+    pid = desktop.spawn([executable, *(args or [])], cwd=cwd, env=env)
     if wait_for_window_s <= 0:
         return [{"pid": pid, "windows": []}]
     window = desktop.wait_for_window_of(pid, wait_for_window_s, target_name=target_name)
@@ -453,33 +310,25 @@ def run_app(
     return [{"pid": pid, "window": window.as_dict()}, *_picture(window, "launched", screenshot)]
 
 
-
 @server.tool()
 def run_in_terminal(
     command: Annotated[str, Field(description="Shell command line to run")],
     cwd: Annotated[str | None, Field(description="Working directory")] = None,
-    wait_for_window_s: float = 20.0,
+    wait_for_window_s: Annotated[float, Field(description="Wait this long for the terminal")] = 20.0,
     settle_ms: Annotated[int, Field(description="Let the program draw before looking")] = 1500,
-    screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
-    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
+    screenshot: Annotated[bool, Field(description="Return a picture")] = True,
 ) -> list:
     """Run a command in a real terminal window, and show it.
 
     For anything that needs a terminal to exist at all - a TUI, an interactive
     prompt, a program that refuses to start without a tty. The window is held
-    open after the command finishes so its last output is still readable
-    rather than vanishing with the window.
+    open after the command finishes so its last output is still readable.
     """
     pid = desktop.spawn(
         [
-            "konsole",
-            "--separate",
-            "--hold",
+            "konsole", "--separate", "--hold",
             *(["--workdir", cwd] if cwd else []),
-            "-e",
-            "bash",
-            "-lc",
-            command,
+            "-e", "bash", "-lc", command,
         ],
         cwd,
     )
@@ -492,10 +341,8 @@ def run_in_terminal(
 
 
 @server.tool()
-def list_tray_items(
-    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
-) -> list[dict]:
-    """Everything in the system tray, with its id, title and status.
+def list_tray_items() -> list[dict]:
+    """Everything in the system tray, with its id, title, status and owner.
 
     Read over D-Bus rather than from pixels. The tray is a row of identical
     little squares, so recognising one by sight is guesswork; every item here
@@ -505,96 +352,32 @@ def list_tray_items(
 
 
 @server.tool()
-def click_tray_item(
+def tray_action(
     pattern: Annotated[str, Field(description="Matched against the item id and title")],
-    action: Annotated[str, Field(description="activate (left), secondary (middle) or context (right)")] = "activate",
-    settle_ms: Annotated[int, Field(description="Let the menu or window appear")] = 700,
-    screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
-    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
+    action: Annotated[str, Field(description="activate (left), secondary (middle), context (right), or scroll")] = "activate",
+    scroll_amount: Annotated[int, Field(description="For action='scroll': positive up, negative down")] = 0,
+    settle_ms: Annotated[int, Field(description="Let the menu or window appear, in ms")] = 700,
+    screenshot: Annotated[bool, Field(description="Return a picture")] = True,
 ) -> list:
-    """Click a tray item and show what appeared.
+    """Click or scroll a tray item, and show what appeared.
 
     Sent as the item's own D-Bus method rather than as a click at its screen
-    position: only the panel knows where an item sits, and an item that has
-    moved would otherwise take the click somewhere else entirely.
+    position: only the panel knows where an item sits, so an item that moved
+    would take the click somewhere else entirely.
     """
     item = desktop.tray.find(pattern)
-    desktop.tray.act(item, action)
+    if action == "scroll":
+        desktop.tray.scroll(item, scroll_amount)
+    else:
+        desktop.tray.act(item, action)
     desktop.settle(settle_ms)
     return [item.as_dict(), *_picture(None, "tray", screenshot)]
-
-
-@server.tool()
-def scroll_tray_item(
-    pattern: Annotated[str, Field(description="Matched against the item id and title")],
-    delta: Annotated[int, Field(description="Positive up, negative down")],
-    orientation: Annotated[str, Field(description="vertical or horizontal")] = "vertical",
-    settle_ms: int = 500,
-    screenshot: Annotated[bool, Field(description="Return a picture; costs ~1s")] = True,
-    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
-) -> list:
-    """Scroll on a tray item - volume applets use this."""
-    item = desktop.tray.find(pattern)
-    desktop.tray.scroll(item, delta, orientation)
-    desktop.settle(settle_ms)
-    return [item.as_dict(), *_picture(None, "tray-scroll", screenshot)]
-
-
-@server.tool()
-def find_and_click(
-    text: Annotated[str, Field(description="Text or label to search for and click")],
-    window_id: Annotated[str | None, Field(description="Target window ID")] = None,
-    settle_ms: Annotated[int, Field(description="Wait after click in ms")] = 400,
-    screenshot: Annotated[bool, Field(description="Return picture result")] = True,
-    timeout: Annotated[float, Field(description="Timeout in seconds")] = 30.0,
-) -> list:
-    """Click a control by its label. Not available on this desktop.
-
-    Locating a control by its text needs the accessibility tree, and on KDE
-    the Qt applications do not publish one: the AT-SPI bus here lists only
-    tray helpers and GTK programs, so `kwrite` is invisible to it even while
-    its window is on screen.
-
-    This refuses rather than guessing. It previously chose coordinates from a
-    table of keywords and clicked them - which meant a caller asking for a
-    button got a click at a fixed point that had nothing to do with where the
-    button was, plus a screenshot that made it look as though something had
-    happened.
-    """
-    del window_id, settle_ms, screenshot, timeout
-    raise DesktopError(
-        f"cannot locate {text!r} by its label: KDE's Qt applications do not "
-        "publish an accessibility tree, so there is nothing to search. "
-        "Take a screenshot, read the position off it, and call click(x, y, "
-        "window_id) instead. To change this, Qt accessibility would have to be "
-        "enabled session-wide (QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1) and every "
-        "application restarted."
-    )
-
-
-@server.tool()
-def assert_window_title(
-    expected: Annotated[str, Field(description="Expected window title substring")],
-    window_id: Annotated[str | None, Field(description="Target window ID; defaults to active window")] = None,
-    timeout: Annotated[float, Field(description="Timeout in seconds")] = 30.0,
-) -> dict:
-    """Assert that a window title contains the expected substring."""
-    window = _resolve(window_id) if window_id else desktop.active_window()
-    actual = window.title or ""
-    matched = expected.lower() in actual.lower()
-    return {
-        "asserted": expected,
-        "actual": actual,
-        "matched": matched,
-        "window": window.as_dict(),
-    }
 
 
 @server.tool()
 def get_process_info(
     target: Annotated[str, Field(description="A pid, or a pattern matched against the command line")],
     include_env: Annotated[bool, Field(description="Include the environment, with credentials blanked")] = True,
-    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
 ) -> dict:
     """Everything about a process and what it put on the desktop.
 
@@ -619,4 +402,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

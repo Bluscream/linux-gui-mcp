@@ -35,28 +35,38 @@ Everything below is already present on Bazzite/Kinoite with KDE 6:
 
 | Tool | Notes |
 | --- | --- |
-| `list_windows` | id, title, class, pid, geometry |
-| `find_window(pattern)` | regex against title and class |
-| `focus_window(id)` | raises it, returns geometry and a picture |
-| `screenshot(id?)` | whole screen, or one window |
-| `click(x, y, id?, button, count)` | coordinates are window-relative when an id is given |
-| `drag(from, to, id?)` | moves in steps, so drop targets see the pointer arrive |
-| `type_text(text, id?, method?, layout?)` | pastes by default; `keystrokes` for real key events |
-| `input_settings()` | which layout, whether pasting is available, what the alternatives are |
-| `press_keys("ctrl+shift+k", id?)` | |
-| `scroll(amount, x?, y?, id?)` | |
-| `wait_for_window(pattern, timeout_s, settle_ms)` | |
-| `wait_for_process(pattern, ...)` | returns the pid and any windows it owns |
-| `active_window()` | |
-| `run_app(command, cwd?, wait_for_window_s)` | starts a GUI program detached in the session |
-| `run_in_terminal(command, cwd?)` | runs it in a real konsole window, held open afterwards |
-| `list_tray_items()` | id, title, status and icon for everything in the tray |
-| `click_tray_item(pattern, action)` | `activate` (left), `secondary` (middle), `context` (right) |
-| `scroll_tray_item(pattern, delta)` | volume applets use this |
+| `find_window(pattern=".")` | every open window: id, title, class, pid, geometry |
+| `active_window()` | which window has focus |
+| `screenshot(id?)` | the screen, or one window |
+| `interact(...)` | click, drag, scroll, paste, type, press keys - in that order, one call |
+| `input_settings()` | which layout, whether pasting is available |
+| `wait_for_window(pattern)` | waits, then shows it |
+| `wait_for_process(pattern)` | pid, plus any windows it owns |
+| `run_app(executable, args?)` | starts a program, or focuses one already running |
+| `run_in_terminal(command)` | for anything needing a tty |
+| `list_tray_items()` | id, title, status, owning pid |
+| `tray_action(pattern, action)` | activate, secondary, context, or scroll |
+| `get_process_info(target)` | a process and everything it put on screen |
 
-Coordinates are **window-relative whenever a `window_id` is given**. A tool
-that only spoke screen coordinates would send every click somewhere
-unintended the moment a window moved, and would do it silently.
+## interact
+
+One tool rather than one per gesture. Everything is optional and happens in a
+fixed order - pointer, scroll, paste, type, keys - so a single call can click
+a field and type into it, which is the usual shape of a UI step and would
+otherwise be two round trips each paying for a screenshot.
+
+Coordinates are **window-relative whenever a `window_id` is given**, and they
+match the screenshot that comes back: the window is captured by its frame
+rectangle, so image (0,0) is the same point as window-relative (0,0).
+Capturing "the active window" instead returns the client area, which excludes
+the titlebar - and then every coordinate read off a screenshot is about 28
+pixels too high, which looks like the click having missed.
+
+`paste_text` and `type_text` are different on purpose. Pasting goes through
+the clipboard and no keyboard layout can garble it, but some fields refuse a
+paste and an application watching for key events sees none. Typing sends real
+keystrokes, rewritten for the layout, because key codes name positions on a
+keyboard rather than letters.
 
 ## The tray
 
@@ -192,8 +202,12 @@ thousand bytes of image per item, none of it wanted.
 
 ## Known gaps
 
-**Multi-monitor origins.** With more than one output, a full screenshot and
-the compositor do not share an origin, which is why window capture asks KDE
-for the active window instead of cropping a full capture to a window's
-geometry. Clicking still uses compositor coordinates and may need an offset on
-the secondary output.
+**Finding a control by its label** is not possible here. It needs an
+accessibility tree, and KDE's Qt applications do not publish one - the AT-SPI
+bus lists only tray helpers and GTK programs, so `kwrite` is invisible to it
+while its window is plainly on screen. Screenshot, read the position off it,
+and pass coordinates. Enabling it would mean `QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1`
+session-wide and restarting every application.
+
+**Multi-monitor origins.** Clicking uses compositor coordinates and may need
+an offset on a secondary output. Window-relative coordinates are unaffected.
