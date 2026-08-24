@@ -102,9 +102,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    image::RgbaImage::from_raw(width, height, rgba)
-        .ok_or("the pixels did not fit the reported size")?
-        .save(out)?;
+    let picture = image::RgbaImage::from_raw(width, height, rgba)
+        .ok_or("the pixels did not fit the reported size")?;
+
+    // Fast compression, but keeping the adaptive filter. Nearly all the time
+    // here is DEFLATE on five million pixels, so turning compression down is
+    // most of a threefold win. Turning the *filter* off as well was tried and
+    // is a bad trade: it saves little further time and makes the file five
+    // times larger, which then has to be carried over the wire and into a
+    // model context.
+    let file = std::fs::File::create(out)?;
+    let encoder = image::codecs::png::PngEncoder::new_with_quality(
+        std::io::BufWriter::new(file),
+        image::codecs::png::CompressionType::Fast,
+        image::codecs::png::FilterType::Up,
+    );
+    picture.write_with_encoder(encoder)?;
     Ok(())
 }
 

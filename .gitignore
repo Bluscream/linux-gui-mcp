@@ -1,3 +1,4 @@
-capture-helper/target/
+target/
 .venv/
 __pycache__/
+*.pyc
