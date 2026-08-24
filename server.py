@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import os
+import signal
 import tempfile
 import time
 from pathlib import Path
@@ -274,6 +275,64 @@ def press_keys(
 
 
 @server.tool()
+def interact(
+    window_id: Annotated[str | None, Field(description="Window id from find_window or list_windows")] = None,
+    x: Annotated[int | None, Field(description="X coordinate, relative to window if specified")] = None,
+    y: Annotated[int | None, Field(description="Y coordinate, relative to window if specified")] = None,
+    to_x: Annotated[int | None, Field(description="End X coordinate for drag action")] = None,
+    to_y: Annotated[int | None, Field(description="End Y coordinate for drag action")] = None,
+    button: Annotated[str, Field(description="Mouse button for click or drag: left, right, middle")] = "left",
+    click_count: Annotated[int, Field(description="Click count (e.g. 1 for single click, 2 for double click)")] = 0,
+    paste_text: Annotated[str | None, Field(description="Text to paste directly into focus/target field")] = None,
+    type_text: Annotated[str | None, Field(description="Text to send as simulated keystrokes")] = None,
+    keys: Annotated[str | None, Field(description="Key chord shortcut to press (e.g. 'ctrl+s', 'enter', 'tab')")] = None,
+    layout: Annotated[str | None, Field(description="Keyboard layout for type_text: us, de, fr")] = None,
+    scroll_amount: Annotated[int, Field(description="Scroll wheel delta: positive scrolls down, negative up")] = 0,
+    focus_first: Annotated[bool, Field(description="Raise and focus window before performing interactions")] = True,
+    settle_ms: Annotated[int, Field(description="Wait after interactions before returning screenshot, in ms")] = 400,
+    screenshot: Annotated[bool, Field(description="Return a picture of the resulting window state")] = True,
+    timeout: Annotated[float, Field(description="Timeout for operation execution in seconds")] = 30.0,
+) -> list:
+    """Perform one or multiple combined GUI actions (click, drag, type, paste, key shortcut, scroll)."""
+    window = _resolve(window_id)
+
+    if window is not None and focus_first:
+        desktop.focus_window(window.id)
+        desktop.settle(150)
+        window = desktop.window_info(window.id)
+
+    # 1. Pointer positioning, click, or drag
+    if x is not None and y is not None:
+        screen_x, screen_y = _point(window, x, y)
+        if to_x is not None and to_y is not None:
+            end_x, end_y = _point(window, to_x, to_y)
+            desktop.drag(screen_x, screen_y, end_x, end_y, button)
+        else:
+            desktop.move_mouse(screen_x, screen_y)
+            if click_count > 0:
+                desktop.click(button, click_count)
+
+    # 2. Scroll wheel
+    if scroll_amount != 0:
+        desktop.scroll(scroll_amount)
+
+    # 3. Paste text
+    if paste_text is not None:
+        desktop.type_text(paste_text, method="paste", layout=layout, timeout=timeout)
+
+    # 4. Type text as keystrokes
+    if type_text is not None:
+        desktop.type_text(type_text, method="keystrokes", layout=layout, timeout=timeout)
+
+    # 5. Press keyboard shortcut / chord
+    if keys is not None:
+        desktop.press(keys)
+
+    desktop.settle(settle_ms)
+    return _picture(window, "interact", screenshot)
+
+
+@server.tool()
 def scroll(
     amount: Annotated[int, Field(description="Positive scrolls down, negative up")],
     x: Annotated[int | None, Field(description="Point here first")] = None,
@@ -376,8 +435,7 @@ def run_app(
         if restart_if_running:
             for w in existing_windows:
                 with contextlib.suppress(Exception):
-                    import os, signal
-                    os.kill(w.pid, signal.SIGKILL)
+                    os.kill(w.pid, signal.SIGTERM)
             time.sleep(0.3)
         elif focus_if_running:
             window = existing_windows[0]
@@ -490,28 +548,28 @@ def find_and_click(
     screenshot: Annotated[bool, Field(description="Return picture result")] = True,
     timeout: Annotated[float, Field(description="Timeout in seconds")] = 30.0,
 ) -> list:
-    """Find text in a window or desktop session and click its center."""
-    window = _resolve(window_id)
-    if window is not None:
-        desktop.focus_window(window.id)
-        desktop.settle(150)
+    """Click a control by its label. Not available on this desktop.
 
-    # Common UI element center heuristics for Concord GUI / standard dialogs
-    text_lower = text.lower().strip()
-    if "demo" in text_lower:
-        cx, cy = 640, 535
-    elif "password" in text_lower or "username" in text_lower:
-        cx, cy = 640, 360
-    elif "token" in text_lower:
-        cx, cy = 640, 420
-    elif "qr" in text_lower:
-        cx, cy = 640, 475
-    else:
-        cx, cy = 640, 400
+    Locating a control by its text needs the accessibility tree, and on KDE
+    the Qt applications do not publish one: the AT-SPI bus here lists only
+    tray helpers and GTK programs, so `kwrite` is invisible to it even while
+    its window is on screen.
 
-    desktop.click()
-    desktop.settle(settle_ms)
-    return _picture(window, f"click_{text_lower}", screenshot)
+    This refuses rather than guessing. It previously chose coordinates from a
+    table of keywords and clicked them - which meant a caller asking for a
+    button got a click at a fixed point that had nothing to do with where the
+    button was, plus a screenshot that made it look as though something had
+    happened.
+    """
+    del window_id, settle_ms, screenshot, timeout
+    raise DesktopError(
+        f"cannot locate {text!r} by its label: KDE's Qt applications do not "
+        "publish an accessibility tree, so there is nothing to search. "
+        "Take a screenshot, read the position off it, and call click(x, y, "
+        "window_id) instead. To change this, Qt accessibility would have to be "
+        "enabled session-wide (QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1) and every "
+        "application restarted."
+    )
 
 
 @server.tool()

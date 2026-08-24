@@ -217,7 +217,9 @@ def type_text(
         with contextlib.suppress(Exception):
             previous = run([which("wl-paste"), "--no-newline"], timeout=min(2.0, timeout))
 
-        p = subprocess.Popen(
+        # Detached rather than waited on: wl-copy stays running to serve the
+        # clipboard until something else claims it, so waiting would hang.
+        subprocess.Popen(
             [clipboard, "--", text],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -225,7 +227,7 @@ def type_text(
             env=session_env(),
             start_new_session=True,
         )
-        time.sleep(0.05)
+        _await_clipboard(text, timeout=min(2.0, timeout))
         press("ctrl+v", timeout=timeout)
         if previous:
             time.sleep(0.1)
@@ -239,6 +241,25 @@ def type_text(
             )
     except Exception:
         _type_keystrokes(text, layout, delay_ms, timeout=timeout)
+
+
+def _await_clipboard(wanted: str, timeout: float = 2.0) -> None:
+    """Wait until the clipboard really holds this, rather than assuming.
+
+    Becoming the clipboard owner is not instant, and a fixed sleep is a guess
+    at how long it takes. Guess short and ctrl+v pastes whatever was there
+    before - which looks like the text having been typed wrongly rather than
+    like a race. Reading it back is the only way to know.
+
+    Gives up quietly on timeout: pasting something is still better than
+    refusing to type at all, and the caller will see the result.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with contextlib.suppress(Exception):
+            if run([which("wl-paste"), "--no-newline"], timeout=1.0) == wanted:
+                return
+        time.sleep(0.02)
 
 
 def _type_keystrokes(text: str, layout: str | None, delay_ms: int, timeout: float = 30.0) -> None:
