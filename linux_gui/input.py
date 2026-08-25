@@ -75,7 +75,47 @@ def _ydotool(args: list[str], timeout: float = 30.0) -> None:
 POINTER_TOLERANCE = 2
 
 #: How many corrections to attempt before giving up and reporting where it is.
-POINTER_ATTEMPTS = 3
+#:
+#: Enough for the estimate to double its way back from a badly wrong start:
+#: each attempt costs about ten milliseconds, and three was not enough to
+#: climb out of a corner.
+POINTER_ATTEMPTS = 8
+
+#: The range of pixels-per-unit worth believing.
+#:
+#: Measured on this desktop the figure sits near 2.0 and drifts to about 2.3
+#: over a long move, because acceleration is a function of speed. Anything
+#: outside these bounds did not come from a clean measurement - the usual
+#: cause is an axis that hit the edge of the screen, which reports less
+#: movement than was delivered and so looks like a tiny scale. Dividing the
+#: next correction by a tiny scale is what sent the pointer into the corner.
+POINTER_SCALE_BOUNDS = (0.25, 8.0)
+
+
+@cache
+def _screen_extent() -> tuple[int, int]:
+    """The largest coordinate the pointer can reach, per axis.
+
+    Found by asking for far more movement than the screen has and reading
+    where it stopped - the compositor clamps, so what comes back is the edge.
+    That is the only thing here that needs to know the screen size, and no
+    tool in this stack will report it directly.
+
+    Cached: it costs a pointer move, and a desktop does not change size
+    mid-session often enough to pay that on every click.
+    """
+    try:
+        _ydotool(["mousemove", "-x", "20000", "-y", "20000"])
+        time.sleep(POINTER_SETTLE)
+        return _read_pointer()
+    except DesktopError:
+        # Unknown, so nothing is ever treated as clamped. That is the old
+        # behaviour, which is wrong but no worse than it was.
+        return (10**9, 10**9)
+
+
+#: Time for the compositor to apply a pointer move before it is read back.
+POINTER_SETTLE = 0.02
 
 
 def move_mouse(x: int, y: int) -> tuple[int, int]:
@@ -101,12 +141,14 @@ def move_mouse(x: int, y: int) -> tuple[int, int]:
     stay cached for the life of the server, sending every click to roughly
     double its intended offset with nothing raised.
     """
+    extent = _screen_extent()
     scale_x, scale_y = _pointer_scale()
-    units_x, units_y = round(x / scale_x), round(y / scale_y)
+    units_x, units_y = _units(x, scale_x, extent[0]), _units(y, scale_y, extent[1])
 
     _home_pointer()
     if units_x or units_y:
         _ydotool(["mousemove", "-x", str(units_x), "-y", str(units_y)])
+    time.sleep(POINTER_SETTLE)
 
     # The pointer started at the corner, so where it is now is what those
     # units delivered.
@@ -126,11 +168,34 @@ def move_mouse(x: int, y: int) -> tuple[int, int]:
         if abs(error[0]) <= POINTER_TOLERANCE and abs(error[1]) <= POINTER_TOLERANCE:
             return landed
 
+        # An axis that ran into the edge of the screen travelled less than it
+        # was told to, so a scale derived from it comes out far too small -
+        # and dividing the next correction by that is what threw the pointer
+        # into the corner. But refusing to learn from it is no better: the
+        # estimate then never changes and the same overshoot repeats, which
+        # is an oscillation from one corner to the other.
+        #
+        # Hitting the edge is itself the measurement. It says the move was
+        # too long, so the pointer covers more ground per unit than assumed,
+        # so the estimate goes up. Doubling reaches any true value in a few
+        # steps from anywhere, which is what makes this recover rather than
+        # merely fail differently.
         moved = (landed[0] - origin[0], landed[1] - origin[1])
-        scale_x = _observed_scale(moved[0], sent[0], scale_x)
-        scale_y = _observed_scale(moved[1], sent[1], scale_y)
+        scale_x = (
+            min(scale_x * 2, POINTER_SCALE_BOUNDS[1])
+            if _clamped(landed[0], origin[0], extent[0])
+            else _observed_scale(moved[0], sent[0], scale_x)
+        )
+        scale_y = (
+            min(scale_y * 2, POINTER_SCALE_BOUNDS[1])
+            if _clamped(landed[1], origin[1], extent[1])
+            else _observed_scale(moved[1], sent[1], scale_y)
+        )
 
-        sent = (round(error[0] / scale_x), round(error[1] / scale_y))
+        sent = (
+            _units(error[0], scale_x, extent[0]),
+            _units(error[1], scale_y, extent[1]),
+        )
         if not sent[0] and not sent[1]:
             # Closer than one unit of the device can express.
             return landed
@@ -138,10 +203,44 @@ def move_mouse(x: int, y: int) -> tuple[int, int]:
         origin = landed
         try:
             _ydotool(["mousemove", "-x", str(sent[0]), "-y", str(sent[1])])
+            time.sleep(POINTER_SETTLE)
         except DesktopError:
             return landed
 
     return landed
+
+
+def _units(pixels: int, scale: float, extent: int) -> int:
+    """Device units for a distance in pixels, never more than one screen.
+
+    The cap is what stops a single bad scale from being able to throw the
+    pointer off the desktop: no correct move is ever longer than the screen,
+    so one that would be is wrong by definition and clamping it keeps the
+    loop somewhere it can still measure from.
+    """
+    asked = round(pixels / scale)
+    limit = round(extent / POINTER_SCALE_BOUNDS[0])
+    return max(-limit, min(limit, asked))
+
+
+#: How close to an edge still counts as being against it, in pixels.
+#:
+#: The pointer does not rest at zero - the compositor stops it at 1 - so a
+#: test for `<= 0` never fires and a move clamped against the left or top
+#: edge was read as a clean one. That is not a detail: the scale learned from
+#: it was wrong in the direction that makes the next move overshoot too.
+POINTER_EDGE_MARGIN = 2
+
+
+def _clamped(landed: int, origin: int, extent: int) -> bool:
+    """Whether an axis stopped because it ran out of screen.
+
+    Only counts when it also tried to move: resting against the edge is not
+    the same as being stopped by it.
+    """
+    if landed == origin:
+        return False
+    return landed <= POINTER_EDGE_MARGIN or landed >= extent - POINTER_EDGE_MARGIN
 
 
 def _observed_scale(moved: int, sent: int, fallback: float) -> float:
@@ -153,7 +252,12 @@ def _observed_scale(moved: int, sent: int, fallback: float) -> float:
     if abs(sent) < 5 or moved == 0:
         return fallback
     observed = moved / sent
-    return observed if observed > 0 else fallback
+    low, high = POINTER_SCALE_BOUNDS
+    if not low <= observed <= high:
+        # Outside anything a real pointer does, so the measurement is not
+        # about the pointer - a clamped axis or a missed reading.
+        return fallback
+    return observed
 
 
 def _home_pointer() -> None:
@@ -173,7 +277,6 @@ def _read_pointer() -> tuple[int, int]:
     return int(values.get("X", 0)), int(values.get("Y", 0))
 
 
-@cache
 def _pointer_scale() -> tuple[float, float]:
     """How far the pointer really travels per unit asked for.
 
@@ -182,22 +285,48 @@ def _pointer_scale() -> tuple[float, float]:
     factor depends on the user's acceleration settings, so it is measured
     once rather than guessed.
 
-    Only ever a starting estimate now: `move_mouse` reads the position back
-    and corrects. A wrong answer here costs an extra correction, where it
-    used to cost every click for the life of the process.
+    Only ever a starting estimate: `move_mouse` reads the position back and
+    corrects. A wrong answer here costs an extra correction, where it used to
+    cost every click for the life of the process.
+
+    A plausible measurement is remembered, because it was costing three
+    round trips on every single move to re-derive a figure that does not
+    change. An implausible one is not remembered - that is the failure this
+    docstring has warned about since before it was true, where one bad
+    calibration is cached and every click for the rest of the session goes
+    to the wrong place.
+
+    Deliberately not `@cache`, which is what it used to be: that remembers
+    whatever came back, including the nonsense, and there is no way to clear
+    it from a check that wants to see the recovery path work.
     """
+    global _CACHED_SCALE
+    if _CACHED_SCALE is not None:
+        return _CACHED_SCALE
+
     probe_x, probe_y = 500, 300
     try:
         _home_pointer()
+        time.sleep(POINTER_SETTLE)
         _ydotool(["mousemove", "-x", str(probe_x), "-y", str(probe_y)])
+        time.sleep(POINTER_SETTLE)
         landed_x, landed_y = _read_pointer()
     except DesktopError:
         return 1.0, 1.0
-    # A zero reading means the position could not be read, not that the
-    # pointer did not move; scaling by it would divide by zero.
+
+    low, high = POINTER_SCALE_BOUNDS
     scale_x = landed_x / probe_x if landed_x else 1.0
     scale_y = landed_y / probe_y if landed_y else 1.0
-    return scale_x or 1.0, scale_y or 1.0
+    if low <= scale_x <= high and low <= scale_y <= high:
+        _CACHED_SCALE = (scale_x, scale_y)
+        return _CACHED_SCALE
+    # Unbelievable, so hand back a neutral estimate and let the closed loop
+    # find the truth rather than baking the nonsense in.
+    return 1.0, 1.0
+
+
+#: A believed pointer scale, once one has been measured.
+_CACHED_SCALE: tuple[float, float] | None = None
 
 
 _BUTTONS = {"left": 0x00, "right": 0x01, "middle": 0x02}
@@ -211,15 +340,28 @@ _BUTTONS = {"left": 0x00, "right": 0x01, "middle": 0x02}
 #: somewhere else, or nowhere, with nothing to show it went wrong.
 CLICK_SETTLE = 0.06
 
+#: How long the button is held down, in seconds.
+#:
+#: A press and release in the same input batch is a zero-length click, and a
+#: toolkit that decides what was clicked on its own frame - GPUI does - can
+#: see both edges between two frames and act on neither. Holding for longer
+#: than a frame at 60Hz puts the press and the release in different frames,
+#: which is what a real click looks like.
+CLICK_HOLD = 0.03
+
 
 def click(button: str = "left", count: int = 1) -> None:
     code = _BUTTONS.get(button.lower())
     if code is None:
         raise DesktopError(f"unknown button {button!r}; use left, right or middle")
     time.sleep(CLICK_SETTLE)
-    # 0x40 is press, 0x80 release; together they are one click.
-    for _ in range(max(1, count)):
-        _ydotool(["click", f"0x{0x40 | code:02X}", f"0x{0x80 | code:02X}"])
+    for index in range(max(1, count)):
+        if index:
+            time.sleep(CLICK_HOLD)
+        # 0x40 is press, 0x80 release; separately, so the button is held.
+        _ydotool(["click", f"0x{0x40 | code:02X}"])
+        time.sleep(CLICK_HOLD)
+        _ydotool(["click", f"0x{0x80 | code:02X}"])
 
 
 def drag(from_x: int, from_y: int, to_x: int, to_y: int, button: str = "left") -> None:

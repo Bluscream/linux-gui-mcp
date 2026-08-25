@@ -248,3 +248,16 @@ session-wide and restarting every application.
 
 **Multi-monitor origins.** Clicking uses compositor coordinates and may need
 an offset on a secondary output. Window-relative coordinates are unaffected.
+
+## Checking the pointer
+
+`move_mouse` sits on top of ydotool's relative moves, libinput's acceleration
+curve and the compositor's clamping. None of those can be faked convincingly
+and all three have been wrong here, so the check drives the real pointer:
+
+```
+python3 check_pointer.py
+```
+
+It takes a couple of seconds, moves the pointer around the screen, and puts
+it back where it found it. Run it after touching anything in `move_mouse`.
