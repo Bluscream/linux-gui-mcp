@@ -59,7 +59,12 @@ def _ydotool(args: list[str], timeout: float = 30.0) -> None:
     env = {**session_env(), "YDOTOOL_SOCKET": YDOTOOL_SOCKET}
     try:
         done = subprocess.run(
-            ["ydotool", *args], capture_output=True, text=True, env=env, check=False, timeout=timeout
+            ["ydotool", *args],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired as expired:
         raise DesktopError(f"ydotool {args[0]} timed out after {timeout}s") from expired
@@ -412,9 +417,7 @@ def type_text(
     """
     method = (method or "auto").strip().lower()
     if method not in ("auto", "paste", "keystrokes"):
-        raise DesktopError(
-            f"unknown method {method!r}; use auto, paste or keystrokes"
-        )
+        raise DesktopError(f"unknown method {method!r}; use auto, paste or keystrokes")
 
     if method == "keystrokes":
         _type_keystrokes(text, layout, delay_ms, timeout=timeout)
@@ -434,7 +437,9 @@ def type_text(
         previous = None
         # An empty clipboard makes wl-paste exit non-zero. Nothing to restore.
         with contextlib.suppress(Exception):
-            previous = run([which("wl-paste"), "--no-newline"], timeout=min(2.0, timeout))
+            previous = run(
+                [which("wl-paste"), "--no-newline"], timeout=min(2.0, timeout)
+            )
 
         # Detached rather than waited on: wl-copy stays running to serve the
         # clipboard until something else claims it, so waiting would hang.
@@ -458,7 +463,7 @@ def type_text(
                 env=session_env(),
                 start_new_session=True,
             )
-    except Exception:
+    except (DesktopError, OSError, subprocess.SubprocessError):
         _type_keystrokes(text, layout, delay_ms, timeout=timeout)
 
 
@@ -481,12 +486,16 @@ def _await_clipboard(wanted: str, timeout: float = 2.0) -> None:
         time.sleep(0.02)
 
 
-def _type_keystrokes(text: str, layout: str | None, delay_ms: int, timeout: float = 30.0) -> None:
+def _type_keystrokes(
+    text: str, layout: str | None, delay_ms: int, timeout: float = 30.0
+) -> None:
     """Send real key events, rewritten for the keyboard layout in use."""
     from . import layouts
 
     remapped = layouts.to_us_positions(text, layout)
-    _ydotool(["type", "--key-delay", str(int(delay_ms)), "--", remapped], timeout=timeout)
+    _ydotool(
+        ["type", "--key-delay", str(int(delay_ms)), "--", remapped], timeout=timeout
+    )
 
 
 def press(combination: str, timeout: float = 30.0) -> None:

@@ -47,7 +47,7 @@ def windows_of(pid: int, target_name: str | None = None) -> list[Window]:
     with contextlib.suppress(Exception):
         stats = []
         for child_stat in Path("/proc").glob("*/stat"):
-            with open(child_stat, "r") as f:
+            with open(child_stat) as f:
                 parts = f.read().split()
                 if len(parts) > 3:
                     stats.append((int(parts[0]), int(parts[3])))
@@ -60,14 +60,17 @@ def windows_of(pid: int, target_name: str | None = None) -> list[Window]:
     if not matched and target_name and all_windows:
         target_clean = target_name.lower().strip()
         matched = [
-            w for w in all_windows
+            w
+            for w in all_windows
             if (w.cls or "").lower() == target_clean
             and "antigravity" not in (w.cls or "").lower()
         ]
     return matched
 
 
-def wait_for_window_of(pid: int, timeout: float = 20.0, poll: float = 0.3, target_name: str | None = None) -> Window:
+def wait_for_window_of(
+    pid: int, timeout: float = 20.0, poll: float = 0.3, target_name: str | None = None
+) -> Window:
     """Wait for a process to put a window on screen.
 
     A process existing and a process having a window are different facts, and

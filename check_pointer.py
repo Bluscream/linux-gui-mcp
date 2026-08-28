@@ -19,6 +19,7 @@ import random
 import sys
 import time
 
+import linux_gui.input as pointer
 from linux_gui.input import (
     POINTER_SCALE_BOUNDS,
     POINTER_TOLERANCE,
@@ -26,7 +27,6 @@ from linux_gui.input import (
     _screen_extent,
     move_mouse,
 )
-import linux_gui.input as pointer
 
 
 def accuracy(extent: tuple[int, int]) -> list[str]:

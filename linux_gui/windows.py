@@ -79,7 +79,7 @@ def window_info(window_id: str) -> Window:
         raise DesktopError(f"could not read the geometry of {window_id}")
 
     def _int(value: str) -> int:
-        return int(round(float(value)))
+        return round(float(value))
 
     try:
         pid: int | None = int(_kdotool(["getwindowpid", window_id]))

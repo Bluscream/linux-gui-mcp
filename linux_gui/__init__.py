@@ -29,10 +29,10 @@ from .processes import Process
 from .shell import DesktopError
 from .tray import TrayItem
 from .windows import (
-    move_window,
     Window,
     active_window,
     focus_window,
+    move_window,
     search_windows,
     wait_for_process,
     wait_for_window,
@@ -50,12 +50,12 @@ __all__ = [
     "capture",
     "click",
     "drag",
-    "move_window",
     "ensure_input_daemon",
     "focus_window",
     "input",
     "launch",
     "move_mouse",
+    "move_window",
     "press",
     "process_report",
     "processes",

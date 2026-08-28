@@ -15,7 +15,10 @@ from . import windows
 from .shell import DesktopError, run, which
 from .windows import Window, focus_window
 
-HELPER = Path(__file__).resolve().parent.parent / "capture-helper/target/release/kwin-capture"
+HELPER = (
+    Path(__file__).resolve().parent.parent
+    / "capture-helper/target/release/kwin-capture"
+)
 
 
 def _kwin_capture(path: Path, window: Window | None) -> bool:
@@ -41,9 +44,13 @@ def _kwin_capture(path: Path, window: Window | None) -> bool:
             # image (0,0) the same point as window-relative (0,0).
             run(
                 [
-                    str(HELPER), "area", str(path),
-                    str(window.x), str(window.y),
-                    str(window.width), str(window.height),
+                    str(HELPER),
+                    "area",
+                    str(path),
+                    str(window.x),
+                    str(window.y),
+                    str(window.width),
+                    str(window.height),
                 ],
                 timeout=20.0,
             )

@@ -105,8 +105,14 @@ def _properties(service: str, path: str) -> dict[str, str]:
     try:
         answered = run(
             [
-                which("busctl"), "--user", "--json=short", "get-property",
-                service, path, ITEM_INTERFACE, *_WANTED,
+                which("busctl"),
+                "--user",
+                "--json=short",
+                "get-property",
+                service,
+                path,
+                ITEM_INTERFACE,
+                *_WANTED,
             ],
             timeout=10.0,
         )
@@ -127,8 +133,7 @@ def _properties(service: str, path: str) -> dict[str, str]:
 def items() -> list[TrayItem]:
     """Everything in the tray, with its identity and owning process."""
     raw = _qdbus(
-        [WATCHER, "/StatusNotifierWatcher",
-         f"{WATCHER}.RegisteredStatusNotifierItems"]
+        [WATCHER, "/StatusNotifierWatcher", f"{WATCHER}.RegisteredStatusNotifierItems"]
     )
     owners = _connection_owners()
     found = []
@@ -193,13 +198,27 @@ def act(item: TrayItem, action: str = "activate", x: int = 0, y: int = 0) -> Non
         raise DesktopError(
             f"unknown tray action {action!r}; use {', '.join(sorted(ACTIONS))}"
         )
-    _qdbus([item.service, item.path, f"{ITEM_INTERFACE}.{method}",
-            str(int(x)), str(int(y))])
+    _qdbus(
+        [
+            item.service,
+            item.path,
+            f"{ITEM_INTERFACE}.{method}",
+            str(int(x)),
+            str(int(y)),
+        ]
+    )
 
 
 def scroll(item: TrayItem, delta: int, orientation: str = "vertical") -> None:
     """Scroll on an item - volume applets use this."""
     if orientation not in ("vertical", "horizontal"):
         raise DesktopError("orientation must be vertical or horizontal")
-    _qdbus([item.service, item.path, f"{ITEM_INTERFACE}.Scroll",
-            str(int(delta)), orientation])
+    _qdbus(
+        [
+            item.service,
+            item.path,
+            f"{ITEM_INTERFACE}.Scroll",
+            str(int(delta)),
+            orientation,
+        ]
+    )

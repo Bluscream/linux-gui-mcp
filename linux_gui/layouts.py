@@ -93,7 +93,7 @@ def session_layout() -> str:
     ):
         try:
             reported = run([which(argv[0]), *argv[1:]], timeout=5.0)
-        except (DesktopError, Exception):
+        except (DesktopError, OSError):
             continue
         for line in reported.splitlines():
             if marker in line.lower():
