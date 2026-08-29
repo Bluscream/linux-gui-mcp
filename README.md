@@ -31,6 +31,11 @@ Everything below is already present on Bazzite/Kinoite with KDE 6:
 - `spectacle`
 - `/dev/uinput` writable by your user (an ACL is enough; no root needed)
 
+## Environment Variables
+
+- `BLOCK_INTERACT` (`1` / `true` / `on` / `yes` / `enabled`): When set, re-evaluated dynamically on every call to block all mutating / interactive desktop actions (`interact`, `move_window`, `run_app`, `run_in_terminal`, `tray_action`) while leaving read-only tools (`find_window`, `active_window`, `screenshot`, `get_process_info`, `list_tray_items`, `input_settings`, `wait_for_*`) functional.
+- `LINUX_GUI_MCP_SHOTS`: Custom directory for storing screenshots (defaults to `/tmp/linux-gui-mcp`).
+
 ## Tools
 
 | Tool | Notes |
@@ -38,7 +43,7 @@ Everything below is already present on Bazzite/Kinoite with KDE 6:
 | `find_window(pattern=".")` | every open window: id, title, class, pid, geometry |
 | `active_window()` | which window has focus |
 | `screenshot(id?)` | the screen, or one window |
-| `interact(...)` | click, drag, scroll, paste, type, press keys - in that order, one call |
+| `interact(...)` | click, drag, scroll, paste, type, press keys, or target text via OCR (`text="Button"`, `ocr_tries=3`) |
 | `input_settings()` | which layout, whether pasting is available |
 | `wait_for_window(pattern)` | waits, then shows it |
 | `wait_for_process(pattern)` | pid, plus any windows it owns |
@@ -52,9 +57,15 @@ Everything below is already present on Bazzite/Kinoite with KDE 6:
 ## interact
 
 One tool rather than one per gesture. Everything is optional and happens in a
-fixed order - pointer, scroll, paste, type, keys - so a single call can click
+fixed order - pointer/OCR text target, scroll, paste, type, keys - so a single call can click
 a field and type into it, which is the usual shape of a UI step and would
 otherwise be two round trips each paying for a screenshot.
+
+**OCR Text Finding & Clicking**:
+Pass `text="Submit"` (or regex pattern) with optional `ocr_tries=3` and `ocr_retry_delay_s=0.5`. It captures the window/screen, detects bounding boxes with Tesseract OCR, automatically calculates the center coordinate of the matching text, and targets/clicks it.
+
+**Pointer Coordinates Reported**:
+Every `interact` call returns both **absolute screen coordinates** and **window-relative coordinates** of the pointer before and after the action.
 
 **With no `window_id` it acts on the whole screen** - screen coordinates,
 nothing focused first, and a picture of the whole desktop. That is the

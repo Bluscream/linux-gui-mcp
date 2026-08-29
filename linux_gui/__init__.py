@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from . import capture, input, launch, processes, tray, windows
+from . import capture, input, launch, ocr, processes, tray, windows
 from .capture import screenshot, settle
 from .input import (
     click,
@@ -21,10 +21,12 @@ from .input import (
     ensure_input_daemon,
     move_mouse,
     press,
+    read_pointer,
     scroll,
     type_text,
 )
 from .launch import spawn, wait_for_window_of, windows_of
+from .ocr import OCRMatch, extract_text_boxes, find_text_on_screen
 from .processes import Process
 from .shell import DesktopError
 from .tray import TrayItem
@@ -42,6 +44,7 @@ from .windows import (
 
 __all__ = [
     "DesktopError",
+    "OCRMatch",
     "Process",
     "ProcessReport",
     "TrayItem",
@@ -51,14 +54,18 @@ __all__ = [
     "click",
     "drag",
     "ensure_input_daemon",
+    "extract_text_boxes",
+    "find_text_on_screen",
     "focus_window",
     "input",
     "launch",
     "move_mouse",
     "move_window",
+    "ocr",
     "press",
     "process_report",
     "processes",
+    "read_pointer",
     "screenshot",
     "scroll",
     "search_windows",

@@ -282,6 +282,11 @@ def _read_pointer() -> tuple[int, int]:
     return int(values.get("X", 0)), int(values.get("Y", 0))
 
 
+def read_pointer() -> tuple[int, int]:
+    """Return the current absolute screen pointer coordinates (x, y)."""
+    return _read_pointer()
+
+
 def _pointer_scale() -> tuple[float, float]:
     """How far the pointer really travels per unit asked for.
 

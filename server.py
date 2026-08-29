@@ -60,6 +60,19 @@ SHOTS = Path(
 POINTER_DRIFT_LIMIT = 3
 
 
+def _check_interact_blocked(tool_name: str) -> None:
+    """Check BLOCK_INTERACT on every non-readonly call.
+
+    Re-read dynamically from the process environment on each invocation so
+    that blocking can be toggled without restarting the server.
+    """
+    val = os.environ.get("BLOCK_INTERACT", "").strip().lower()
+    if val in ("1", "true", "yes", "on", "enabled"):
+        raise DesktopError(
+            f"Tool '{tool_name}' is blocked by BLOCK_INTERACT environment variable"
+        )
+
+
 def _notes(notes: list[str]) -> list:
     """Anything the caller should know, ahead of the picture."""
     return [TextContent(type="text", text=note) for note in notes]
@@ -81,23 +94,27 @@ def _picture(window: Window | None, tag: str, wanted: bool = True) -> list:
 
 
 def _resolve(window_id: str | None) -> Window | None:
-    """Look a window up, or say plainly that it is not there.
+    """Look a window up by exact ID, title pattern, or class pattern.
 
-    Checked before every action rather than letting the underlying tool fail:
-    a window that closed is the ordinary case, and `kdotool` reports it with a
-    message that names neither the window nor what to do instead. An agent
-    reading that cannot tell a closed window from a broken tool.
+    Allows callers to pass a window title or class pattern (e.g. 'claude') directly
+    without needing a separate `find_window` call first.
     """
     if window_id is None:
         return None
-    if not desktop.window_exists(window_id):
-        known = desktop.search_windows(".")
-        listed = ", ".join(f"{w.cls}:{w.title[:28]!r}" for w in known[:8]) or "none"
-        raise DesktopError(
-            f"no window {window_id!r} is open. Currently open: {listed}. "
-            "Call find_window for ids that are still valid."
-        )
-    return desktop.window_info(window_id)
+    if desktop.window_exists(window_id):
+        return desktop.window_info(window_id)
+
+    # If not an exact ID, try matching by class or title pattern
+    matches = desktop.search_windows(window_id)
+    if matches:
+        return matches[0]
+
+    known = desktop.search_windows(".")
+    listed = ", ".join(f"{w.cls}:{w.title[:28]!r}" for w in known[:8]) or "none"
+    raise DesktopError(
+        f"no window matching {window_id!r} is open. Currently open: {listed}. "
+        "Call find_window for ids that are still valid."
+    )
 
 
 def _point(window: Window | None, x: int, y: int) -> tuple[int, int]:
@@ -151,6 +168,24 @@ def interact(
             description="Window to act on; coordinates become relative to it. Omit to act on the whole screen, which is the fallback when a window will not respond"
         ),
     ] = None,
+    text: Annotated[
+        str | None,
+        Field(
+            description="Text or regex to locate on screen/window via OCR and target its center (overrides explicit x/y)"
+        ),
+    ] = None,
+    ocr_tries: Annotated[
+        int,
+        Field(
+            description="Number of OCR attempts to locate the text before giving up (useful for UI elements that take a moment to render)"
+        ),
+    ] = 3,
+    ocr_retry_delay_s: Annotated[
+        float,
+        Field(
+            description="Seconds to wait between OCR search attempts"
+        ),
+    ] = 0.5,
     x: Annotated[
         int | None, Field(description="X, relative to the window when one is given")
     ] = None,
@@ -207,6 +242,10 @@ def interact(
     With `window_id` and no action at all, this just focuses the window and
     shows it.
 
+    **OCR text targeting**: provide `text="Submit"` to find that text inside
+    the window (or screen) using OCR, retrying up to `ocr_tries` times, and
+    target its center automatically.
+
     **Without `window_id` this acts on the whole screen**: coordinates are
     screen coordinates, nothing is focused first, and the picture is of the
     whole desktop. That is the fallback when a window will not cooperate -
@@ -220,7 +259,15 @@ def interact(
     none. `type_text` sends real keystrokes, rewritten for the layout, because
     key codes name positions on a keyboard rather than letters.
     """
+    _check_interact_blocked("interact")
     notes: list[str] = []
+
+    # Record pointer position before interaction
+    try:
+        before_abs = desktop.read_pointer()
+    except Exception:
+        before_abs = None
+
     window = _resolve(window_id)
     if window is not None and focus_first:
         desktop.focus_window(window.id)
@@ -228,6 +275,34 @@ def interact(
         # Re-read: focusing can move or resize a window, and coordinates taken
         # from stale geometry land somewhere else entirely.
         window = desktop.window_info(window.id)
+
+    if before_abs is not None:
+        if window is not None:
+            before_rel = (before_abs[0] - window.x, before_abs[1] - window.y)
+            notes.append(
+                f"pointer before: absolute ({before_abs[0]}, {before_abs[1]}), "
+                f"window-relative ({before_rel[0]}, {before_rel[1]})"
+            )
+        else:
+            notes.append(f"pointer before: absolute ({before_abs[0]}, {before_abs[1]})")
+
+    # Resolve coordinates via OCR if text is specified
+    if text is not None:
+        ocr_match = desktop.find_text_on_screen(
+            text,
+            window=window,
+            tries=ocr_tries,
+            retry_delay_s=ocr_retry_delay_s,
+        )
+        x = ocr_match.center_x
+        y = ocr_match.center_y
+        notes.append(
+            f"OCR found text {text!r} (matched: {ocr_match.text!r}, conf: {ocr_match.confidence:.0f}%) "
+            f"at center ({x}, {y})"
+        )
+        # Default click_count to 1 if not explicitly given and text is provided
+        if click_count == 0 and type_text is None and paste_text is None and keys is None and to_x is None:
+            click_count = 1
 
     if x is not None and y is not None:
         start = _point(window, x, y)
@@ -262,6 +337,20 @@ def interact(
         )
     if keys is not None:
         desktop.press(keys)
+
+    # Record pointer position after interaction
+    try:
+        after_abs = desktop.read_pointer()
+        if window is not None:
+            after_rel = (after_abs[0] - window.x, after_abs[1] - window.y)
+            notes.append(
+                f"pointer after: absolute ({after_abs[0]}, {after_abs[1]}), "
+                f"window-relative ({after_rel[0]}, {after_rel[1]})"
+            )
+        else:
+            notes.append(f"pointer after: absolute ({after_abs[0]}, {after_abs[1]})")
+    except Exception:
+        pass
 
     desktop.settle(settle_ms)
     return _notes(notes) + _picture(window, "interact", screenshot)
@@ -300,6 +389,7 @@ def move_window(
     that assumed otherwise would then be computing coordinates against a
     shape the window is not.
     """
+    _check_interact_blocked("move_window")
     window = _resolve(window_id)
     if window is None:
         raise DesktopError("move_window needs a window id")
@@ -415,6 +505,7 @@ def run_app(
     explicitly rather than inherited: a program started without
     WAYLAND_DISPLAY does not fail loudly, it simply never appears.
     """
+    _check_interact_blocked("run_app")
     # From the executable, never from the arguments. Taking the last argument
     # meant `run_app("kwrite", ["notes.md"])` looked for a window class called
     # "notes.md" - so the already-running check silently never matched, and
@@ -474,6 +565,7 @@ def run_in_terminal(
     prompt, a program that refuses to start without a tty. The window is held
     open after the command finishes so its last output is still readable.
     """
+    _check_interact_blocked("run_in_terminal")
     pid = desktop.spawn(
         [
             "konsole",
@@ -532,6 +624,7 @@ def tray_action(
     position: only the panel knows where an item sits, so an item that moved
     would take the click somewhere else entirely.
     """
+    _check_interact_blocked("tray_action")
     item = desktop.tray.find(pattern)
     if action == "scroll":
         desktop.tray.scroll(item, scroll_amount)
