@@ -35,10 +35,6 @@ server = MCPServer(
     ),
 )
 
-SHOTS = Path(
-    os.environ.get("LINUX_GUI_MCP_SHOTS", Path(tempfile.gettempdir()) / "linux-gui-mcp")
-)
-
 POINTER_DRIFT_LIMIT = 3
 
 
@@ -56,12 +52,33 @@ def _notes(notes: list[str]) -> list:
     return [TextContent(type="text", text=note) for note in notes]
 
 
-def _picture(window: Window | None, tag: str, wanted: bool = True) -> list:
-    """Return standard MCP ImageContent screenshot unless declined."""
+def _picture(
+    window: Window | None,
+    wanted: bool = True,
+    save_to: str | None = None,
+) -> list:
+    """Return standard MCP ImageContent screenshot unless declined.
+
+    When save_to is provided, the image is saved directly to that path.
+    When omitted, the image is purely in-memory.
+    """
     if not wanted:
         return []
-    path = desktop.screenshot(SHOTS / f"{tag}.png", window)
-    data = base64.b64encode(path.read_bytes()).decode("ascii")
+
+    if save_to:
+        target_path = Path(save_to).expanduser().resolve()
+        path = desktop.screenshot(target_path, window)
+        data = base64.b64encode(path.read_bytes()).decode("ascii")
+    else:
+        # In-memory only: capture to temporary file, read bytes, and clean up immediately
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+        try:
+            path = desktop.screenshot(tmp_path, window)
+            data = base64.b64encode(path.read_bytes()).decode("ascii")
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
     return [ImageContent(type="image", data=data, mimeType="image/png")]
 
 
@@ -116,6 +133,12 @@ def find_window(
     screenshot: Annotated[
         bool, Field(description="Include a screenshot of the matched/active window")
     ] = False,
+    save_to: Annotated[
+        str | None,
+        Field(
+            description="Optional file path to save the screenshot to. Parent directories are created if needed"
+        ),
+    ] = None,
 ) -> list:
     """Find windows, inspect the active focused window, or wait for a window to appear.
 
@@ -123,17 +146,17 @@ def find_window(
     """
     if focused_only:
         active = desktop.active_window()
-        return [active.as_dict(), *_picture(active, "active", screenshot)]
+        return [active.as_dict(), *_picture(active, screenshot, save_to=save_to)]
 
     if wait_timeout_s > 0:
         window = desktop.wait_for_window(pattern, wait_timeout_s)
         desktop.settle(settle_ms)
         window = desktop.window_info(window.id)
-        return [window.as_dict(), *_picture(window, "waited", screenshot)]
+        return [window.as_dict(), *_picture(window, screenshot, save_to=save_to)]
 
     windows = desktop.search_windows(pattern)
     res = [w.as_dict() for w in windows]
-    pic = _picture(windows[0] if windows else None, "found", screenshot)
+    pic = _picture(windows[0] if windows else None, screenshot, save_to=save_to)
     return [res, *pic] if screenshot else res
 
 
@@ -144,10 +167,16 @@ def screenshot(
         Field(description="Window ID, title, or class pattern. Omit for full desktop screen"),
     ] = None,
     settle_ms: Annotated[int, Field(description="Wait before capturing, in ms")] = 0,
+    save_to: Annotated[
+        str | None,
+        Field(
+            description="Optional file path to save the screenshot to. Parent directories are created if needed"
+        ),
+    ] = None,
 ) -> list:
     """Capture a screenshot of the entire desktop or a specific window."""
     desktop.settle(settle_ms)
-    return _picture(_resolve(window_id), "shot")
+    return _picture(_resolve(window_id), save_to=save_to)
 
 
 @server.tool()
@@ -228,6 +257,12 @@ def interact(
     screenshot: Annotated[
         bool, Field(description="Return a screenshot of what was affected")
     ] = True,
+    save_to: Annotated[
+        str | None,
+        Field(
+            description="Optional file path to save the screenshot to. Parent directories are created if needed"
+        ),
+    ] = None,
     timeout: Annotated[
         float, Field(description="Timeout for input commands, in seconds")
     ] = 30.0,
@@ -352,7 +387,7 @@ def interact(
         pass
 
     desktop.settle(settle_ms)
-    return _notes(notes) + _picture(window, "interact", screenshot)
+    return _notes(notes) + _picture(window, screenshot, save_to=save_to)
 
 
 @server.tool()
@@ -386,6 +421,12 @@ def run_app(
         int, Field(description="Let the window draw before looking")
     ] = 800,
     screenshot: Annotated[bool, Field(description="Return a picture")] = True,
+    save_to: Annotated[
+        str | None,
+        Field(
+            description="Optional file path to save the screenshot to. Parent directories are created if needed"
+        ),
+    ] = None,
 ) -> list:
     """Launch GUI applications or commands in a terminal window.
 
@@ -414,7 +455,7 @@ def run_app(
         window = desktop.window_info(window.id)
         return [
             {"pid": pid, "window": window.as_dict()},
-            *_picture(window, "terminal", screenshot),
+            *_picture(window, screenshot, save_to=save_to),
         ]
 
     target_name = Path(executable_or_command).name
@@ -437,7 +478,7 @@ def run_app(
         window = desktop.window_info(window.id)
         return [
             {"pid": window.pid, "window": window.as_dict(), "focused_existing": True},
-            *_picture(window, "focused", screenshot),
+            *_picture(window, screenshot, save_to=save_to),
         ]
 
     pid = desktop.spawn([executable_or_command, *(args or [])], cwd=cwd, env=env)
@@ -448,7 +489,7 @@ def run_app(
     window = desktop.window_info(window.id)
     return [
         {"pid": pid, "window": window.as_dict()},
-        *_picture(window, "launched", screenshot),
+        *_picture(window, screenshot, save_to=save_to),
     ]
 
 
@@ -475,6 +516,12 @@ def tray(
     screenshot: Annotated[
         bool, Field(description="Return picture after tray action")
     ] = True,
+    save_to: Annotated[
+        str | None,
+        Field(
+            description="Optional file path to save the screenshot to. Parent directories are created if needed"
+        ),
+    ] = None,
 ) -> list:
     """Inspect system tray items or interact with them over D-Bus.
 
@@ -490,7 +537,7 @@ def tray(
     else:
         desktop.tray.act(item, action)
     desktop.settle(settle_ms)
-    return [item.as_dict(), *_picture(None, "tray", screenshot)]
+    return [item.as_dict(), *_picture(None, screenshot, save_to=save_to)]
 
 
 @server.tool()

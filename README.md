@@ -12,17 +12,16 @@ Drive a KDE/Wayland desktop over MCP with a consolidated high-leverage toolset: 
 ## Environment Variables
 
 - `BLOCK_INTERACT` (`1` / `true` / `on` / `yes` / `enabled`): When set, re-evaluated dynamically on every call to block all mutating / interactive desktop actions (`interact`, `run_app`, `tray`) while leaving read-only tools (`find_window`, `screenshot`, `get_process_info`) functional.
-- `LINUX_GUI_MCP_SHOTS`: Custom directory for storing screenshots (defaults to `/tmp/linux-gui-mcp`).
 
 ## Consolidated Tools (6 High-Leverage Tools)
 
 | Tool | Description |
 | :--- | :--- |
-| **`find_window`** | Unified window query: lists open windows, gets focused window (`focused_only=True`), or waits for windows (`wait_timeout_s > 0`). |
-| **`screenshot`** | Captures the entire desktop or a specific window by ID / title / class pattern. |
-| **`interact`** | Complete all-in-one GUI interaction in a single call: window focus, move/resize, OCR text search (`text="..."`), click/drag, scroll, type/paste, shortcut keys, and pointer position tracking. |
-| **`run_app`** | Launches GUI applications or runs interactive terminal commands (`terminal=True`). |
-| **`tray`** | Unified system tray tool: enumerates tray icons (`action="list"`) or interacts with them (`activate`, `context`, `secondary`, `scroll`) over D-Bus. |
+| **`find_window`** | Unified window query: lists open windows, gets focused window (`focused_only=True`), or waits for windows (`wait_timeout_s > 0`). Supports optional `screenshot` and `save_to` path. |
+| **`screenshot`** | Captures the entire desktop or a specific window by ID / title / class pattern. Supports optional `save_to` path. |
+| **`interact`** | Complete all-in-one GUI interaction in a single call: window focus, move/resize, OCR text search (`text="..."`), click/drag, scroll, type/paste, shortcut keys, pointer position tracking, and optional `save_to` screenshot destination. |
+| **`run_app`** | Launches GUI applications or runs interactive terminal commands (`terminal=True`), with optional `screenshot` and `save_to` path. |
+| **`tray`** | Unified system tray tool: enumerates tray icons (`action="list"`) or interacts with them (`activate`, `context`, `secondary`, `scroll`) over D-Bus, with optional `save_to` path. |
 | **`get_process_info`** | Deep process introspection: inspects PID, command line args, credentials-blanked environment, open windows, and owned tray icons (with optional `wait_timeout_s`). |
 
 ---
@@ -37,4 +36,4 @@ Drive a KDE/Wayland desktop over MCP with a consolidated high-leverage toolset: 
 6. **Scroll Wheel** (if `scroll_amount` provided)
 7. **Keyboard Input** (`paste_text`, `type_text`, `keys`)
 8. **Capture Final Pointer Position** (reported in metadata)
-9. **Capture Screenshot** (returned as standard MCP `ImageContent`)
+9. **Capture Screenshot** (returned as standard MCP `ImageContent` or saved to `save_to` path)
